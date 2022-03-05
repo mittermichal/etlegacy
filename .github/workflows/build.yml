@@ -165,6 +165,7 @@ jobs:
 
   android-mod:
     runs-on: ubuntu-18.04
+    if: ${{ secrets.ANDROID_SIGN_APK_ALLIAS != '' }}
     env:
           SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGN_APK_ALLIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGN_APK_PASS }}
@@ -448,6 +449,7 @@ jobs:
 
   android:
     runs-on: ubuntu-18.04
+    if: ${{ secrets.ANDROID_SIGN_APK_ALLIAS != '' }}
     env:
           SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGN_APK_ALLIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGN_APK_PASS }}
