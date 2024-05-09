@@ -12,7 +12,7 @@ name: ETLBuildPR
 on:
   pull_request:
     branches: [ master ]
-    types: [ opened, synchronize, reopened ]
+    types: [ opened, synchronize, reopened, labeled ]
 
 jobs:
 
@@ -202,29 +202,38 @@ jobs:
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
       CI_ETL_TAG: ${{needs.version.outputs.tag}}
+      BUILD_ANDROID: ${{ vars.BUILD_ANDROID }}
     needs: [ version ]
     container:
       image: etlegacy/android-build
     steps:
       - name: Setup JDK
         uses: actions/setup-java@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Android Repo
         uses: actions/checkout@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           submodules: true
 
       - name: Build and Generate Package
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
           ./gradlew clean assembleDebug
           ls -R
 
       - name: Rename APK
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         run: |
           for FILE in ./app/build/outputs/apk/debug/*; do mv $FILE ${FILE%-*}.apk; done
           ls app/build/outputs/apk/debug
+
+      - name: Skip android build
+        if: ${{ vars.BUILD_ANDROID == 'FALSE' }}
+        run: echo {{ $BUILD_ANDROID }}
 
