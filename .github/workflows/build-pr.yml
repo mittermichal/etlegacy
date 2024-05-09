@@ -39,7 +39,7 @@ jobs:
 
 
   lnx-aarch64-mod:
-    if: ${{ github.event.label.name == 'build' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build')
     runs-on: ubuntu-20.04
     needs: version
     container:
@@ -72,7 +72,7 @@ jobs:
           path: build/legacy/legacy_*.pk3
 
   osx-mod:
-    if: ${{ github.event.label.name == 'build' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build')
     runs-on: macos-12
     needs: version
     steps:
@@ -121,7 +121,7 @@ jobs:
   # Since lnx32 is installing the most, use it as the step that combines all the other steps mod files.
   # This step also generates the final packages for 32 bit lnx.
   mod-merger:
-    if: ${{ github.event.label.name == 'build' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build')
     runs-on: ubuntu-20.04
     needs: [ version, osx-mod, lnx-aarch64-mod ]  # todo: lnx64-mod, lnx32-mod, osx-mod, win-mod, win64-mod, lnx-aarch64-mod, android-mod
     steps:
@@ -173,7 +173,7 @@ jobs:
 # Run the build on all the current platforms
   lnx64:
     runs-on: ubuntu-20.04
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     needs: [ version ]
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
@@ -209,7 +209,7 @@ jobs:
 
   lnx32:
     runs-on: ubuntu-20.04
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     needs: [ version ]
     steps:
       - uses: actions/checkout@v4
@@ -242,7 +242,7 @@ jobs:
 
   lnx-aarch64:
     runs-on: ubuntu-latest
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     needs: [ version ]
     container:
       image: etlegacy/lnx-aarch64-build
@@ -265,7 +265,7 @@ jobs:
 
   osx:
     runs-on: macos-12
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     needs: [ version ]
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
@@ -294,7 +294,7 @@ jobs:
 
   win:
     runs-on: windows-2019
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     needs: [ version ]
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
@@ -315,7 +315,7 @@ jobs:
         run: cpack
 
   win64:
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     runs-on: windows-2019
     needs: [ version ]
     env:
@@ -337,7 +337,7 @@ jobs:
         run: cpack
 
   android:
-    if: ${{ github.event.label.name == 'build-client' }}
+    if: contains(github.event.pull_request.labels.*.name, 'build-client')
     runs-on: ubuntu-20.04
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
