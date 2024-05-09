@@ -55,7 +55,7 @@ jobs:
           CI_ETL_TAG: ${{needs.version.outputs.tag}}
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
-          ./easybuild.sh build -RPIT -mod -ninja
+          ./easybuild.sh build -RPIT -mod -noextra -ninja
 
       - uses: actions/upload-artifact@v4
         with:
@@ -65,6 +65,11 @@ jobs:
             build/legacy/ui*.so
             build/legacy/qagame*.so
             build/legacy/tvgame*.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: incomplete-mod-pk3
+          path: build/legacy/legacy_*.pk3
 
   osx-mod:
     if: ${{ github.event.label.name == 'build' }}
@@ -93,7 +98,7 @@ jobs:
           CI_ETL_TAG: ${{needs.version.outputs.tag}}
         shell: bash
         run: |
-          ./easybuild.sh build -64 -mod --osx=10.10 --osx-arc="arm64" -j
+          ./easybuild.sh build -64 -mod -noextra --osx=10.10 --osx-arc="arm64" -j
 
       - uses: actions/upload-artifact@v4
         with:
