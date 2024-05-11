@@ -12,8 +12,8 @@ name: ETLBuild
 on:
 #  pull_request:
   push:
-    tags:
-      - 'v*'
+#    tags:
+#      - 'v*'
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * FRI'
@@ -743,7 +743,8 @@ jobs:
 
   docker:
     runs-on: ubuntu-20.04
-    needs: [ version, upload ] # only upload to docker if the upload to the site was successfully completed
+    needs: [ version ]
+#    needs: [ version, upload ] # only upload to docker if the upload to the site was successfully completed
     container:
       image: etlegacy/lnx-aarch64-build
     # only run on master
