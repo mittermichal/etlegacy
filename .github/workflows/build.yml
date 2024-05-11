@@ -745,8 +745,6 @@ jobs:
     runs-on: ubuntu-20.04
     needs: [ version, lnx32, lnx64, osx, win, win64, lnx-aarch64, android ]
 #    needs: [ version, upload ] # only upload to docker if the upload to the site was successfully completed
-    container:
-      image: etlegacy/lnx-aarch64-build
     # only run on master
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/server-docker-aarch64' || startsWith(github.ref, 'refs/tags/v') && ${{ vars.BUILD_DOCKER != 'FALSE' }}
     env:
