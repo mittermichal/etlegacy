@@ -751,6 +751,7 @@ jobs:
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
       CI_ETL_TAG: ${{needs.version.outputs.tag}}
+      BUILD_DOCKER: ${{ vars.BUILD_DOCKER }}
     steps:
       - uses: actions/checkout@v4
         with:
