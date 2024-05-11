@@ -8,7 +8,7 @@ jobs:
 
   variable:
     name: variable
-    if: ${{ vars.UPLOAD_PACKAGES == 'FALSE' }}
+    if: ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
     runs-on: ubuntu-latest
     env:
       UPLOAD_PACKAGES: ${{ vars.UPLOAD_PACKAGES }}
