@@ -236,22 +236,26 @@ jobs:
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGN_APK_PASS }}
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
       CI_ETL_TAG: ${{needs.version.outputs.tag}}
+      BUILD_ANDROID: ${{ vars.BUILD_ANDROID }}
     container:
       image: etlegacy/android-build
     steps:
       - name: Setup JDK
         uses: actions/setup-java@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Android Repo
         uses: actions/checkout@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           submodules: true
           fetch-depth: 0
 
       - name: Build
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
           ./gradlew clean assembleRelease
@@ -259,6 +263,7 @@ jobs:
 
       - name: Upload arm64-v8a
         uses: actions/upload-artifact@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           name: android-arm64-mod
           path: |
@@ -267,6 +272,7 @@ jobs:
 
       - name: Upload x86
         uses: actions/upload-artifact@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           name: android-x86-mod
           path: |
@@ -275,12 +281,16 @@ jobs:
 
       - name: Upload x86_64
         uses: actions/upload-artifact@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           name: android-x86_64-mod
           path: |
             app/build/intermediates/merged_native_libs/release/out/lib/x86_64/libcgame*.so
             app/build/intermediates/merged_native_libs/release/out/lib/x86_64/libui*.so
 
+      - name: Skip android mod build
+        if: ${{ vars.BUILD_ANDROID == 'FALSE' }}
+        run: echo "Skipping android mod build because its disabled with BUILD_ANDROID workflow variable"
 
 #   __  __                                                          _
 #  |  \/  |                                                        | |
@@ -307,10 +317,18 @@ jobs:
           path: platforms
           merge-multiple: true
 
-      - name: Create supported platform manifest
+      - name: Create supported platform manifest with android
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         shell: bash
         run: |
           echo "win_x86 win_x86_64 lnx_x86 lnx_x86_64 macos_x86_64 macos_aarch64 lnx_armv8_64 android_aarch64 android_x86 android_x86_64" > platforms.manifest
+
+      - name: Create supported platform manifest without android
+        if: ${{ vars.BUILD_ANDROID == 'FALSE' }}
+        shell: bash
+        run: |
+          echo "win_x86 win_x86_64 lnx_x86 lnx_x86_64 macos_x86_64 macos_aarch64 lnx_armv8_64" > platforms.manifest
+
 
       - name: Merge mod files
         shell: bash
@@ -612,45 +630,57 @@ jobs:
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGN_APK_PASS }}
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
       CI_ETL_TAG: ${{needs.version.outputs.tag}}
+      BUILD_ANDROID: ${{ vars.BUILD_ANDROID }}
     needs: [ version, mod-merger ]
     container:
       image: etlegacy/android-build
     steps:
       - name: Setup JDK
         uses: actions/setup-java@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Android Repo
         uses: actions/checkout@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           submodules: true
 
       - uses: actions/download-artifact@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           name: All-mods
           path: app/src/main/assets
 
       - name: Display structure of downloaded files
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         run: ls -R
         working-directory: app/src/main/assets
 
       - name: Build and Generate Package
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
           ./gradlew clean assembleRelease
           ls -R
 
       - name: Rename APK
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         run: |
           for FILE in ./app/build/outputs/apk/release/*; do mv $FILE ${FILE%-*}.apk; done
           ls app/build/outputs/apk/release
 
       - uses: actions/upload-artifact@v4
+        if: ${{ vars.BUILD_ANDROID != 'FALSE' }}
         with:
           name: android-packages
           path: app/build/outputs/apk/release/etlegacy*.apk
+
+      - name: Skip android build
+        if: ${{ vars.BUILD_ANDROID == 'FALSE' }}
+        run: echo "Skipping android build because its disabled with BUILD_ANDROID workflow variable"
 
 #   _    _           _                       _                         _      _____   _
 #  | |  | |         | |                     | |                       | |    / ____| | |
@@ -664,7 +694,7 @@ jobs:
   upload:
     runs-on: ubuntu-20.04
     needs: [ version, lnx32, lnx64, osx, win, win64, lnx-aarch64, android ]
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/server-docker-aarch64' || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: geekyeggo/delete-artifact@v4
         with:
@@ -682,7 +712,7 @@ jobs:
           path: packages
 
       - name: Upload packages
-        if: ${{ steps.vars.outputs.hash_exists == '404' }}
+        if: ${{ steps.vars.outputs.hash_exists == '404' }} && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
         shell: bash
         working-directory: packages
         run: |
@@ -696,7 +726,7 @@ jobs:
           find mod-zip/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=eacan4jn14wt" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
 
       - name: Discord notification
-        if: ${{ steps.vars.outputs.hash_exists == '404' }} && needs.version.outputs.describe != needs.version.outputs.tag
+        if: ${{ steps.vars.outputs.hash_exists == '404' }} && needs.version.outputs.describe != needs.version.outputs.tag && ${{ vars.POST_DISCORD_WEBHOOK != 'FALSE' }}
         env:
           DISCORD_WEBHOOK: ${{ secrets.PUBLISH_DISCORD_WEBHOOK }}
         uses: Ilshidur/action-discord@0.3.0
@@ -706,8 +736,10 @@ jobs:
   docker:
     runs-on: ubuntu-20.04
     needs: [ version, upload ] # only upload to docker if the upload to the site was successfully completed
+    container:
+      image: etlegacy/lnx-aarch64-build
     # only run on master
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/server-docker-aarch64' || startsWith(github.ref, 'refs/tags/v') && ${{ vars.BUILD_DOCKER != 'FALSE' }}
     env:
       CI_ETL_DESCRIBE: ${{needs.version.outputs.describe}}
       CI_ETL_TAG: ${{needs.version.outputs.tag}}
@@ -718,7 +750,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: lnx64-packages
+          name: lnx-aarch64-packages
           path: build/package
 
       - name: Setup folder
