@@ -691,55 +691,55 @@ jobs:
 #           | |                                                                                                         | |
 #           |_|                                                                                                         |_|
 
-  upload:
-    runs-on: ubuntu-20.04
-    env:
-      UPLOAD_PACKAGES: ${{ vars.UPLOAD_PACKAGES }}
-    needs: [ version, lnx32, lnx64, osx, win, win64, lnx-aarch64, android ]
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/server-docker-aarch64' || startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: geekyeggo/delete-artifact@v4
-        if: ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
-        with:
-          name: |
-            All-mods
-
-      - name: Get version status
-        if: ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
-        id: vars
-        run: |
-          echo "hash_exists=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.LEGACY_UPLOAD_CHECK_URL }}${{ github.sha }} 2>/dev/null)" >> $GITHUB_OUTPUT
-
-      - uses: actions/download-artifact@v4
-        if: ${{ steps.vars.outputs.hash_exists == '404' }} && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
-        with:
-          path: packages
-
-      - name: Upload packages
-        if: ${{ steps.vars.outputs.hash_exists == '404' }} && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
-        shell: bash
-        working-directory: packages
-        run: |
-          find lnx64-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=ouJ8LoD4tpFE" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find lnx32-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=3Eib0F0HiVcY" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find osx-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=zrm0gXDJ0vvQ" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find win-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=qkKkqKmiKHul" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find win64-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=1EM7l2e6pqpA" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find android-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=pqxx51ioaosg" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find lnx-aarch64-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=r3tqepamenlf" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-          find mod-zip/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=eacan4jn14wt" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
-
-      - name: Discord notification
-        if: ${{ steps.vars.outputs.hash_exists == '404' }} && needs.version.outputs.describe != needs.version.outputs.tag && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.PUBLISH_DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@0.3.0
-        with:
-          args: "<@&673533235887865879> Build from ETLegacy: ${{ needs.version.outputs.describe }} (${{ github.sha }}) has been published.\nDownload at: https://www.etlegacy.com/workflow-files"
-
-      - name: Skip upload
-        if: ${{ vars.UPLOAD_PACKAGES == 'FALSE' }}
-        run: echo "Skipping upload because its disabled with UPLOAD_PACKAGES variable"
+#  upload:
+#    runs-on: ubuntu-20.04
+#    env:
+#      UPLOAD_PACKAGES: ${{ vars.UPLOAD_PACKAGES }}
+#    needs: [ version, lnx32, lnx64, osx, win, win64, lnx-aarch64, android ]
+#    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/server-docker-aarch64' || startsWith(github.ref, 'refs/tags/v')
+#    steps:
+#      - uses: geekyeggo/delete-artifact@v4
+#        if: ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
+#        with:
+#          name: |
+#            All-mods
+#
+#      - name: Get version status
+#        if: ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
+#        id: vars
+#        run: |
+#          echo "hash_exists=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.LEGACY_UPLOAD_CHECK_URL }}${{ github.sha }} 2>/dev/null)" >> $GITHUB_OUTPUT
+#
+#      - uses: actions/download-artifact@v4
+#        if: ${{ steps.vars.outputs.hash_exists == '404' }} && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
+#        with:
+#          path: packages
+#
+#      - name: Upload packages
+#        if: ${{ steps.vars.outputs.hash_exists == '404' }} && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
+#        shell: bash
+#        working-directory: packages
+#        run: |
+#          find lnx64-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=ouJ8LoD4tpFE" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find lnx32-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=3Eib0F0HiVcY" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find osx-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=zrm0gXDJ0vvQ" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find win-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=qkKkqKmiKHul" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find win64-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=1EM7l2e6pqpA" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find android-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=pqxx51ioaosg" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find lnx-aarch64-packages/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=r3tqepamenlf" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#          find mod-zip/ -name '*' -type f -exec curl --fail -H "Authorization: Bearer ${{ secrets.LEGACY_AUTH }}" -X POST -H "Content-Type: multipart/form-data" -F "data=@{}" -F "upload_id=eacan4jn14wt" -F"sha=${{ github.sha }}" ${{ secrets.LEGACY_UPLOAD_URL }} \;
+#
+#      - name: Discord notification
+#        if: ${{ steps.vars.outputs.hash_exists == '404' }} && needs.version.outputs.describe != needs.version.outputs.tag && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
+#        env:
+#          DISCORD_WEBHOOK: ${{ secrets.PUBLISH_DISCORD_WEBHOOK }}
+#        uses: Ilshidur/action-discord@0.3.0
+#        with:
+#          args: "<@&673533235887865879> Build from ETLegacy: ${{ needs.version.outputs.describe }} (${{ github.sha }}) has been published.\nDownload at: https://www.etlegacy.com/workflow-files"
+#
+#      - name: Skip upload
+#        if: ${{ vars.UPLOAD_PACKAGES == 'FALSE' }}
+#        run: echo "Skipping upload because its disabled with UPLOAD_PACKAGES variable"
 
   docker:
     runs-on: ubuntu-20.04
@@ -808,8 +808,11 @@ jobs:
 
   cleanup:
     runs-on: ubuntu-20.04
+    env:
+      UPLOAD_PACKAGES: ${{ vars.UPLOAD_PACKAGES }}
     if: always() && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
-    needs: [ upload, docker ]
+    needs: [ docker ]
+#    needs: [ upload, docker ]
     steps:
       - uses: geekyeggo/delete-artifact@v4
         with:
@@ -823,6 +826,8 @@ jobs:
 
   cleanup-without-upload:
     runs-on: ubuntu-20.04
+    env:
+      UPLOAD_PACKAGES: ${{ vars.UPLOAD_PACKAGES }}
     if: always() && ${{ vars.UPLOAD_PACKAGES == 'FALSE' }}
     needs: [ docker ]
     steps:
