@@ -743,7 +743,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-20.04
-    needs: [ version ]
+    needs: [ version, lnx32, lnx64, osx, win, win64, lnx-aarch64, android ]
 #    needs: [ version, upload ] # only upload to docker if the upload to the site was successfully completed
     container:
       image: etlegacy/lnx-aarch64-build
