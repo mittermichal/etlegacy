@@ -694,7 +694,7 @@ jobs:
   upload:
     runs-on: ubuntu-20.04
     needs: [ version, lnx32, lnx64, osx, win, win64, lnx-aarch64, android ]
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/server-docker-aarch64' || startsWith(github.ref, 'refs/tags/v')
+    if: (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
     steps:
       - uses: geekyeggo/delete-artifact@v4
         with:
@@ -712,7 +712,7 @@ jobs:
           path: packages
 
       - name: Upload packages
-        if: ${{ steps.vars.outputs.hash_exists == '404' }} && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
+        if: ${{ steps.vars.outputs.hash_exists == '404' }}
         shell: bash
         working-directory: packages
         run: |
@@ -799,7 +799,7 @@ jobs:
 
   cleanup:
     runs-on: ubuntu-20.04
-    if: always()
+    if: always() && ${{ vars.UPLOAD_PACKAGES != 'FALSE' }}
     needs: [ upload, docker ]
     steps:
       - uses: geekyeggo/delete-artifact@v4
@@ -812,3 +812,17 @@ jobs:
             *-packages
             *-mod
 
+  cleanup-without-upload:
+    runs-on: ubuntu-20.04
+    if: always() && ${{ vars.UPLOAD_PACKAGES == 'FALSE' }}
+    needs: [ docker ]
+    steps:
+      - uses: geekyeggo/delete-artifact@v4
+        with:
+          failOnError: false
+          name: |
+            All-mods
+            mod-zip
+            incomplete-mod-pk3
+            *-packages
+            *-mod
