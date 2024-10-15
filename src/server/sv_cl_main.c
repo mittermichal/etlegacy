@@ -546,8 +546,20 @@ void SV_CL_ConfigstringModified(void)
 	char        *dup;
 	gameState_t oldGs;
 	int         len;
+	char        fs_game[MAX_CVAR_VALUE_STRING];
 
 	index = Q_atoi(Cmd_Argv(1));
+
+	// don't force cvars from master to viewers
+	if (svcls.isTVGame && index == CS_SVCVAR)
+	{
+		Cvar_VariableStringBuffer("fs_game", fs_game, sizeof(fs_game));
+		if (Q_strncmp(fs_game, MODNAME, sizeof(MODNAME)) == 0)
+		{
+			return;
+		}
+	}
+
 	if (index < 0 || index >= MAX_CONFIGSTRINGS)
 	{
 		Com_Error(ERR_DROP, "configstring < 0 or configstring >= MAX_CONFIGSTRINGS");

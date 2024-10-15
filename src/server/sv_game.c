@@ -742,7 +742,8 @@ void SV_ShutdownGameProgs(void)
  */
 static void SV_InitGameVM(qboolean restart)
 {
-	int i;
+	int  i;
+	char fs_game[MAX_CVAR_VALUE_STRING];
 
 	// start the entity parsing at the beginning
 	sv.entityParsePoint = CM_EntityString();
@@ -756,9 +757,16 @@ static void SV_InitGameVM(qboolean restart)
 
 	if (svcls.isTVGame && !restart)
 	{
+		Cvar_VariableStringBuffer("fs_game", fs_game, sizeof(fs_game));
 		for (i = 0; i < MAX_CONFIGSTRINGS; i++)
 		{
 			if (!svcl.gameState.stringOffsets[i] || i == CS_SYSTEMINFO)
+			{
+				continue;
+			}
+
+			// don't force cvars from master to viewers
+			if (i == CS_SVCVAR && Q_strncmp(fs_game, MODNAME, sizeof(MODNAME)) == 0)
 			{
 				continue;
 			}
