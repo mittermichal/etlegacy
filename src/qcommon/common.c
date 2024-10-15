@@ -3348,6 +3348,11 @@ static void Com_WatchDog(void)
 			}
 		}
 	}
+	else
+	{
+		watchdogTime = 0;
+		watchWarn    = qfalse;
+	}
 }
 #endif
 
