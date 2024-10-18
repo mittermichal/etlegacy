@@ -4174,8 +4174,9 @@ static void CG_Draw2D(void)
 			CG_ScanForCrosshairEntity();
 			CG_CheckForCursorHints();
 
-			CG_DrawActiveHud();
+			//CG_DrawActiveHud();
 		}
+		CG_DrawActiveHud();
 	}
 	else if (cgs.eventHandling != CGAME_EVENT_NONE)
 	{

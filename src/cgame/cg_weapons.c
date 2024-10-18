@@ -2471,32 +2471,32 @@ void CG_AddSoundWeapon(centity_t *cent)
 	{
 		trap_S_AddLoopingSound(cent->lerpOrigin, vec3_origin, weapon->readySound, 255, 0);
 	}
-
-	if (cent->currentState.clientNum == cg.snap->ps.clientNum)
+#ifdef FEATURE_EDV
+	if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
+#endif
 	{
-		// tick sound to help the player 'count' in their head
-		if (cg.predictedPlayerState.grenadeTimeLeft)
-		{
-			if (((cg.grenLastTime) % 1000) < ((cg.predictedPlayerState.grenadeTimeLeft) % 1000))
-			{
-				switch (cg.predictedPlayerState.grenadeTimeLeft / 1000)
-				{
-				case 3:
-					trap_S_StartLocalSound(cgs.media.grenadePulseSound[3], CHAN_LOCAL_SOUND);
-					break;
-				case 2:
-					trap_S_StartLocalSound(cgs.media.grenadePulseSound[2], CHAN_LOCAL_SOUND);
-					break;
-				case 1:
-					trap_S_StartLocalSound(cgs.media.grenadePulseSound[1], CHAN_LOCAL_SOUND);
-					break;
-				case 0:
-					trap_S_StartLocalSound(cgs.media.grenadePulseSound[0], CHAN_LOCAL_SOUND);
-					break;
+		if (cent->currentState.clientNum == cg.snap->ps.clientNum) {
+			// tick sound to help the player 'count' in their head
+			if (cg.predictedPlayerState.grenadeTimeLeft) {
+				if (((cg.grenLastTime) % 1000) < ((cg.predictedPlayerState.grenadeTimeLeft) % 1000)) {
+					switch (cg.predictedPlayerState.grenadeTimeLeft / 1000) {
+						case 3:
+							trap_S_StartLocalSound(cgs.media.grenadePulseSound[3], CHAN_LOCAL_SOUND);
+							break;
+						case 2:
+							trap_S_StartLocalSound(cgs.media.grenadePulseSound[2], CHAN_LOCAL_SOUND);
+							break;
+						case 1:
+							trap_S_StartLocalSound(cgs.media.grenadePulseSound[1], CHAN_LOCAL_SOUND);
+							break;
+						case 0:
+							trap_S_StartLocalSound(cgs.media.grenadePulseSound[0], CHAN_LOCAL_SOUND);
+							break;
+					}
 				}
-			}
 
-			cg.grenLastTime = cg.predictedPlayerState.grenadeTimeLeft;
+				cg.grenLastTime = cg.predictedPlayerState.grenadeTimeLeft;
+			}
 		}
 	}
 }

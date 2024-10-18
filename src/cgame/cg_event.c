@@ -2461,7 +2461,13 @@ void CG_EntityEvent(centity_t *cent, vec3_t position)
 		//}
 		break;
 	case EV_BULLET:
-		CG_PlayHitSound(es->otherEntityNum, es->modelindex);
+#ifdef FEATURE_EDV
+			if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
+#endif
+			{
+				CG_PlayHitSound(es->otherEntityNum, es->modelindex);
+			}
+
 		CG_Bullet(es->weapon, es->pos.trBase, es->otherEntityNum, es->otherEntityNum2);
 		break;
 	case EV_GENERAL_SOUND:
@@ -2936,7 +2942,13 @@ void CG_EntityEvent(centity_t *cent, vec3_t position)
 		}
 		break;
 	case EV_PLAYER_HIT:
-		CG_PlayHitSound(es->clientNum, es->eventParm);
+#ifdef FEATURE_EDV
+			if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
+#endif
+			{
+				CG_PlayHitSound(es->clientNum, es->eventParm);
+			}
+
 		break;
 	default:
 		if (cg.demoPlayback)
