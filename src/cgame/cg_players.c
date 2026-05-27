@@ -2435,13 +2435,18 @@ static void CG_PlayerSprites(centity_t *cent)
 			}
 		}
 	}
-
-	if (CG_IsOnFireteam(cent->currentState.number) && CG_IsOnSameFireteam(cent->currentState.number, cg.clientNum)
-	    && cg_fireteamSprites.integer)
+	// TODO this IFDEF was removed later in upstream, find out why
+#ifdef FEATURE_EDV
+	if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
+#endif
 	{
-		CG_PlayerFloatSprite(cent, cgs.media.fireteamIcon, height, numIcons++,
-		                     cgs.clientinfo[cent->currentState.number].selected
-		                         ? cgs.fireteamSpritesColorSelected : cgs.fireteamSpritesColor);
+		if (CG_IsOnFireteam(cent->currentState.number) && CG_IsOnSameFireteam(cent->currentState.number, cg.clientNum)
+			&& cg_fireteamSprites.integer)
+		{
+			CG_PlayerFloatSprite(cent, cgs.media.fireteamIcon, height, numIcons++,
+								 cgs.clientinfo[cent->currentState.number].selected
+									 ? cgs.fireteamSpritesColorSelected : cgs.fireteamSpritesColor);
+		}
 	}
 }
 
