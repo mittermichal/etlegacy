@@ -4370,6 +4370,10 @@ void CG_DrawSpectatorMessage(hudComponent_t *comp);
 void CG_DrawLimboMessage(hudComponent_t *comp);
 void CG_DrawFollow(hudComponent_t *comp);
 void CG_DrawMissileCamera(hudComponent_t *comp);
+#define RIFLENADE_TRAJ_MAX_POINTS 48
+qboolean CG_RiflenadeActivateHeld(void);
+qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints);
+void CG_DrawRiflenadeTrajectoryRails(void);
 void CG_DrawTeamInfo(hudComponent_t *comp);
 void CG_DrawSpectator(hudComponent_t *comp);
 void CG_DrawPMItemsBig(hudComponent_t *comp);

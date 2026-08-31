@@ -4837,17 +4837,34 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	float     x, y, w, h;
 	refdef_t  refdef;
 	vec3_t    delta, angles;
-	centity_t *cent;
+	centity_t *cent = NULL;
+	vec3_t    predStart, predEnd;
+	vec3_t    predTrajPoints[RIFLENADE_TRAJ_MAX_POINTS];
+	int       predNumTrajPoints = 0;
+	qboolean  usingPrediction = qfalse;
 
-	if (!cg.latestMissile || cgs.matchPaused)
+	if (cgs.matchPaused)
+	{
+		return;
+	}
+
+	if (cg.latestMissile)
+	{
+		cent = cg.latestMissile;
+	}
+	else if ((cgs.sv_cheats || cg.demoPlayback) &&
+	         CG_RiflenadeActivateHeld() &&
+	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints))
+	{
+		usingPrediction = qtrue;
+	}
+	else
 	{
 		return;
 	}
 
 	// Save out the old render info so we don't kill the LOD system here
 	trap_R_SaveViewParms();
-
-	cent = cg.latestMissile;
 
 	memset(&refdef, 0, sizeof(refdef_t));
 	memcpy(refdef.areamask, cg.snap->areamask, sizeof(refdef.areamask));
@@ -4869,9 +4886,53 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	refdef.height = h;
 	refdef.time   = cg.time;
 
-	VectorCopy(cent->lerpOrigin, refdef.vieworg);
+	if (usingPrediction)
+	{
+		vec3_t      camPos;
+		const int   RIFLENADE_CAM_BACK_LOOKBACK = 8;      // how many trailing waypoints to consider
+		const float RIFLENADE_CAM_BACK_DIST     = 240.0f; // desired pullback distance from the explosion
+		const float backDistSq                  = RIFLENADE_CAM_BACK_DIST * RIFLENADE_CAM_BACK_DIST;
+		int         lookbackStart;
+		int         i;
 
-	BG_EvaluateTrajectoryDelta(&cent->currentState.pos, cg.time, delta, qtrue, 0);
+		VectorCopy(predEnd, camPos); // fallback: sit at the explosion point if nothing else qualifies
+
+		lookbackStart = predNumTrajPoints - 1 - RIFLENADE_CAM_BACK_LOOKBACK;
+		if (lookbackStart < 0)
+		{
+			lookbackStart = 0;
+		}
+
+		for (i = predNumTrajPoints - 1; i >= lookbackStart; i--)
+		{
+			vec3_t toPoint;
+			float  distSq;
+
+			VectorSubtract(predTrajPoints[i], predEnd, toPoint);
+			distSq = VectorLengthSquared(toPoint);
+
+			VectorCopy(predTrajPoints[i], camPos); // furthest-back point examined so far, used if none reach the threshold
+
+			if (distSq >= backDistSq)
+			{
+				break;
+			}
+		}
+
+		VectorSubtract(predEnd, camPos, delta);
+		if (VectorLengthSquared(delta) < 1.0f) // degenerate (camera essentially at the explosion) - fall back
+		{
+			VectorCopy(predStart, camPos);
+			VectorSubtract(predEnd, predStart, delta);
+		}
+
+		VectorCopy(camPos, refdef.vieworg); // always look directly at the predicted explosion point
+	}
+	else
+	{
+		VectorCopy(cent->lerpOrigin, refdef.vieworg);
+		BG_EvaluateTrajectoryDelta(&cent->currentState.pos, cg.time, delta, qtrue, 0);
+	}
 	vectoangles(delta, angles);
 	AnglesToAxis(angles, refdef.viewaxis);
 
@@ -4909,4 +4970,22 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 
 	// Reset the view parameters
 	trap_R_RestoreViewParms();
+
+	if (usingPrediction)
+	{
+		vec3_t  groundTraceEnd;
+		trace_t groundTrace;
+		float   groundDist;
+
+		VectorCopy(predEnd, groundTraceEnd);
+		groundTraceEnd[2] -= 8192.0f;
+
+		CG_Trace(&groundTrace, predEnd, NULL, NULL, groundTraceEnd, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+		groundDist = groundTrace.fraction * 8192.0f;
+
+		if (groundDist > 1.0f)
+		{
+			CG_DrawCompText(comp, va("%.0f", groundDist), comp->colorMain, comp->styleText, &cgs.media.limboFont2);
+		}
+	}
 }
