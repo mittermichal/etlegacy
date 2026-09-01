@@ -4842,6 +4842,8 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	vec3_t    predTrajPoints[RIFLENADE_TRAJ_MAX_POINTS];
 	int       predNumTrajPoints = 0;
 	qboolean  usingPrediction = qfalse;
+	qboolean  predExplodes    = qfalse; // qfalse whenever predEnd is just where the missile vanished
+	                                     // (SURF_NOIMPACT, out-of-world, ...) rather than a real impact
 
 	if (cgs.matchPaused)
 	{
@@ -4854,7 +4856,7 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	}
 	else if ((cgs.sv_cheats || cg.demoPlayback) &&
 	         CG_RiflenadeActivateHeld() &&
-	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints))
+	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints, &predExplodes))
 	{
 		usingPrediction = qtrue;
 	}
@@ -4971,21 +4973,48 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	// Reset the view parameters
 	trap_R_RestoreViewParms();
 
-	if (usingPrediction)
+	// ground-height readout applies to both the predicted explosion point and the real missile's
+	// current/last-known position (cg.latestMissile keeps pointing at it after it explodes, since
+	// it is only ever reassigned - never cleared - so this keeps showing the real explosion's height
+	// once CG_MissileHitWall's effects become visible in the camera, matching what the user sees)
+	if (usingPrediction ? predExplodes : (cent != NULL))
 	{
+		vec3_t  queryPoint;
 		vec3_t  groundTraceEnd;
 		trace_t groundTrace;
 		float   groundDist;
 
-		VectorCopy(predEnd, groundTraceEnd);
+		VectorCopy(usingPrediction ? predEnd : cent->lerpOrigin, queryPoint);
+
+		VectorCopy(queryPoint, groundTraceEnd);
 		groundTraceEnd[2] -= 8192.0f;
 
-		CG_Trace(&groundTrace, predEnd, NULL, NULL, groundTraceEnd, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+		CG_Trace(&groundTrace, queryPoint, NULL, NULL, groundTraceEnd, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
 		groundDist = groundTrace.fraction * 8192.0f;
 
+		// z is always shown; the ground-distance prefix is only meaningful (and only added) once
+		// the point is actually off the floor - previously the whole line, z included, was skipped
+		// whenever groundDist was ~0 (e.g. the explosion happened right at ground level)
 		if (groundDist > 1.0f)
 		{
-			CG_DrawCompText(comp, va("%.0f", groundDist), comp->colorMain, comp->styleText, &cgs.media.limboFont2);
+			CG_DrawCompText(comp, va("%.0f (z:%.0f)", groundDist, queryPoint[2]), comp->colorMain, comp->styleText, &cgs.media.limboFont2);
 		}
+		else
+		{
+			CG_DrawCompText(comp, va("z:%.0f", queryPoint[2]), comp->colorMain, comp->styleText, &cgs.media.limboFont2);
+		}
+	}
+	else if (usingPrediction && !predExplodes)
+	{
+		// no explosion to preview (destroyed silently mid-flight) - reuse the same "can't do this"
+		// icon shown over a weapon on the ground the player isn't allowed to pick up (HINT_RESTRICTED),
+		// half the previous size, anchored at the component's top-left - the same base point
+		// CG_DrawCompText uses for the ground-height readout above. x/y/w/h here are already
+		// CG_AdjustFrom640'd (see above) - CG_DrawPic would adjust them a second time, so draw
+		// directly with the already-scaled rect instead.
+		float iconSize = w * 0.15f;
+
+		trap_R_SetColor(NULL);
+		trap_R_DrawStretchPic(x, y, iconSize, iconSize, 0, 0, 1, 1, cgs.media.friendShader);
 	}
 }

@@ -2662,12 +2662,94 @@ qboolean CG_RiflenadeActivateHeld(void)
  * simulated arc, for drawing a visual preview of the full trajectory (not just the last segment)
  * @param[in,out] numTrajPoints optional (may be NULL if trajPoints is NULL) - set to 0 on entry,
  * receives the number of points written to trajPoints
- * @return qfalse if the launch point itself is blocked
+ * @param[out] explodes optional (may be NULL) - set to qtrue if the trajectory ends in an actual
+ * explosion (segEnd is a real impact/settle point), qfalse if the missile would instead be
+ * destroyed silently (SURF_NOIMPACT, falling out of the world, etc) - segStart/segEnd/trajPoints
+ * are still populated up to the point it vanished, so the trajectory itself can still be previewed
+ * @return qfalse only if there is nothing to preview at all (the launch point itself is blocked)
  */
-qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints)
+/**
+ * @brief Mirrors the ACTUAL runtime ent->r.mins/maxs a missile gets in G_PreFilledMissileEntity()
+ * (g_misc.c) - NOT simply the fire table's boundingBox column. That column is only ever copied into
+ * ent->r.mins/maxs when the missile spawns with contents == CONTENTS_CORPSE (dynamite/landmine/
+ * satchel); every other missile - riflenade, thrown grenades, smoke marker/bomb - keeps the entity's
+ * zero-initialized mins/maxs and flies as a genuine zero-size POINT trace, not a box. Confirmed live
+ * against a real GPG40 missile via gdb (ent->r.mins/maxs read back as (0,0,0)/(0,0,0)) - tracing a box
+ * for those weapons clips nearby walls/ledges a real point-sized missile flies straight past.
+ */
+static void CG_RiflenadeMissileBounds(weapon_t weapon, vec3_t mins, vec3_t maxs)
+{
+	switch (weapon)
+	{
+	case WP_DYNAMITE:
+		VectorSet(mins, -10, -10, 0);
+		VectorSet(maxs, 10, 10, 11);
+		break;
+	case WP_LANDMINE:
+		VectorSet(mins, -4, -4, 0);
+		VectorSet(maxs, 4, 4, 10);
+		break;
+	case WP_SATCHEL:
+		VectorSet(mins, -11, -11, 0);
+		VectorSet(maxs, 11, 11, 8);
+		break;
+	default: // WP_GRENADE_LAUNCHER/PINEAPPLE, WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_GPG40/M7 - CONTENTS_NONE,
+	         // so ent->r.mins/maxs are never populated from the fire table and stay zeroed
+		VectorSet(mins, 0, 0, 0);
+		VectorSet(maxs, 0, 0, 0);
+		break;
+	}
+}
+
+/**
+ * @brief Mirrors the weapon fire table's boundingBox column (g_weapon.c weapFireTable), which -
+ * unlike the missile's runtime r.mins/maxs (see CG_RiflenadeMissileBounds) - IS what both
+ * weapon_gpg40_fire() and weapon_grenadelauncher_fire() pass to their launch-spot validity traces.
+ * So the launch check is a box trace even for weapons that then fly as a zero-size point.
+ */
+static void CG_RiflenadeLaunchBounds(weapon_t weapon, vec3_t mins, vec3_t maxs)
+{
+	switch (weapon)
+	{
+	case WP_DYNAMITE:
+		VectorSet(mins, -10, -10, 0);
+		VectorSet(maxs, 10, 10, 11);
+		break;
+	case WP_LANDMINE:
+		VectorSet(mins, -4, -4, 0);
+		VectorSet(maxs, 4, 4, 10);
+		break;
+	case WP_SATCHEL:
+		VectorSet(mins, -11, -11, 0);
+		VectorSet(maxs, 11, 11, 8);
+		break;
+	default:
+		VectorSet(mins, -4, -4, 0);
+		VectorSet(maxs, 4, 4, 6);
+		break;
+	}
+}
+
+/**
+ * @brief Client-side copy of SnapVectorTowards() (g_weapon.c) - snaps each axis away from `to`,
+ * so a launch point clipped back out of a wall never rounds back into it.
+ */
+static void CG_SnapVectorTowards(vec3_t v, vec3_t to)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		v[i] = (to[i] <= v[i]) ? (float)floor(v[i]) : (float)ceil(v[i]);
+	}
+}
+
+qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes)
 {
 	weapon_t      weapon    = cg.predictedPlayerState.weapon;
 	weaponTable_t *wt       = GetWeaponTableData(weapon);
+	vec3_t        missileMins, missileMaxs;
+	vec3_t        launchMins, launchMaxs;
 	// WP_KAR98/WP_CARBINE (rifle not yet switched into grenade-launcher mode) fire exactly the same
 	// riflenade round as WP_GPG40/WP_M7 once +activate is used to launch it - only the weapon number
 	// differs, so the launch physics must match, unlike the throwable family below
@@ -2683,17 +2765,50 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 	int           elapsed;
 	int           nextRecordAt = 0;
 	const int     RECORD_INTERVAL = 4000 / (RIFLENADE_TRAJ_MAX_POINTS - 1); // spread samples evenly over the full MAX_TIME
-	const int     STEP           = 10;   // ms per simulation step - small enough to avoid tunneling through
-	                                      // thin SURF_SKY brush faces (at 2000u/s a 50ms step covers ~95
-	                                      // units, easily skipping a thin sky face entirely in one trace and
-	                                      // hitting its non-sky backside/structural brush instead, unlike the
-	                                      // real server which ticks much more frequently and reliably catches it
+	// matches the server exactly: G_RunMissile() (g_main.c) runs once per server frame and does
+	// exactly ONE collision trace covering that whole frame's movement - not finer substeps. Sampling
+	// collision at any other cadence (e.g. a fixed 10ms) checks points along the arc the server never
+	// actually checks, which normally doesn't matter but can flip the outcome at a knife-edge (a thin
+	// SURF_SKY brush face, or a narrow sky-hole surrounded by solid ceiling) since the missile can end
+	// up on a different side of the boundary than the server's own coarser sampling would find
+	const int     STEP           = (cgs.sv_fps > 0) ? (1000 / cgs.sv_fps) : DEFAULT_SV_FRAMETIME;
+	const int     PRESTEP        = 50;   // matches g_local.h MISSILE_PRESTEP_TIME (-50): the missile's
+	                                      // trTime is backdated by 50ms at spawn, so its first server-side
+	                                      // collision trace already covers STEP+50ms, not just STEP
 	const int     MAX_TIME       = 4000; // matches riflenade fuse/think timeout, g_weapon.c fire table; used as a
-	                                      // generous simulation cap for the throwable family too (they don't
-	                                      // auto-explode on a timer while flying - only riflenade's BOUNCE_EXPLODE
-	                                      // rule below does that - so this just bounds the simulation)
+	                                      // generous simulation cap - the throwable family's own fuseTime (below)
+	                                      // is normally what ends the loop first
 	const int     BOUNCE_EXPLODE = 750;  // g_missile.c: riflenade explodes ~750ms after launch once it has bounced;
 	                                      // does not apply to the throwable family (see isRiflenade checks below)
+	// throwable family (grenades/smoke marker/smoke bomb) explodes on a fixed fuse timer
+	// (fire_missile() in g_missile.c: bolt->nextthink = level.time + ps.grenadeTimeLeft, or the
+	// weapon table's full grenadeTime if not cooked) completely independent of physics - wherever
+	// the grenade physically is when the timer elapses is where it explodes, even mid-flight or
+	// mid-bounce, NOT wherever it eventually settles to rest. Riflenade/dynamite/landmine/satchel
+	// have grenadeTime==0 (no such timer - riflenade uses BOUNCE_EXPLODE instead, the others are
+	// armed/detonated separately) so fuseTime stays 0 (disabled) for them.
+	// ...and the fuse is NOT the full grenadeTime when the throw hasn't started yet: PM_Weapon sets
+	// grenadeTimeLeft = grenadeTime the moment +attack goes down, together with a weaponDelay of
+	// fireDelayTime, and the fuse ticks down during that pull-back animation - the missile only
+	// spawns once the delay expires. So a grenade thrown "right now" is already fireDelayTime into
+	// its fuse by the time it leaves the hand (measured live: a 4000ms pineapple fuse had 3775ms
+	// left at launch, one server frame short of the full 250ms delay)
+	// PRESTEP is added because `elapsed` below is measured from the missile's trTime, which is
+	// backdated by MISSILE_PRESTEP_TIME, while nextthink is set from the (later) fire frame -
+	// without it the predicted explosion lands two server frames short along the arc
+	const int     fuseTime = (!isRiflenade && wt->grenadeTime > 0)
+	                          ? (((cg.predictedPlayerState.grenadeTimeLeft > 0)
+	                              ? cg.predictedPlayerState.grenadeTimeLeft
+	                              : (wt->grenadeTime - wt->fireDelayTime)) + PRESTEP)
+	                          : 0;
+
+	if (explodes)
+	{
+		*explodes = qtrue; // default; cleared on the silent-destruction paths below
+	}
+
+	CG_RiflenadeMissileBounds(weapon, missileMins, missileMaxs);
+	CG_RiflenadeLaunchBounds(weapon, launchMins, launchMaxs);
 
 	AngleVectors(cg.predictedPlayerState.viewangles, forward, right, up);
 
@@ -2707,23 +2822,47 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		pos[2] += cg.predictedPlayerState.viewheight;
 		VectorMA(pos, wt->muzzlePointOffset[1], right, pos);
 		VectorMA(pos, wt->muzzlePointOffset[2], up, pos);
+		SnapVector(pos); // matches CalcMuzzlePoint()'s own SnapVector(muzzlePoint) exactly (g_weapon.c) -
+		                 // without this, pos differs from the real (integer) launch point by a fraction
+		                 // of a unit, enough to flip a knife-edge collision result near a wall/ledge
 
-		// avoid launching from inside a wall, mirrors weapon_gpg40_fire's initial trace
+		// matches weapon_gpg40_fire() exactly (g_weapon.c) - NOT a single direct eye->muzzle trace,
+		// which clips nearby ledges/geometry the real two-step check would clear: first trace 32
+		// units straight forward from the eye (the "nade-through-teamdoor" check), and only if THAT
+		// is blocked does it fall back to that trace's endpoint; otherwise the actual validity check
+		// is the much shorter second trace from the 32-forward point to the offset muzzle point
 		{
-			vec3_t eyePos;
+			vec3_t eyePos, fwdPos;
 
 			VectorCopy(cg.predictedPlayerState.origin, eyePos);
 			eyePos[2] += cg.predictedPlayerState.viewheight;
+			VectorMA(eyePos, 32, forward, fwdPos);
 
-			CG_Trace(&trace, eyePos, NULL, NULL, pos, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
-			if (trace.fraction <= 0.0f)
+			// both traces use the weapon fire table's boundingBox, NOT the missile's runtime
+			// (zero-size) bounds - the launch check really is a box trace even though the round
+			// itself then flies as a point
+			CG_Trace(&trace, eyePos, launchMins, launchMaxs, fwdPos, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+			if (trace.fraction < 1.0f)
 			{
-				return qfalse; // launch point itself blocked
+				VectorCopy(trace.endpos, pos);
+				CG_SnapVectorTowards(pos, eyePos);
 			}
-			VectorCopy(trace.endpos, pos);
+			else
+			{
+				CG_Trace(&trace, fwdPos, launchMins, launchMaxs, pos, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+				if (trace.fraction < 1.0f)
+				{
+					VectorCopy(trace.endpos, pos);
+					CG_SnapVectorTowards(pos, fwdPos);
+				}
+			}
 		}
 
 		VectorScale(forward, 2000, velocity); // matches hardcoded muzzle velocity in weapon_gpg40_fire()
+		SnapVector(velocity);                 // G_PreFilledMissileEntity() snaps trDelta "to save net
+		                                      // bandwidth" (g_misc.c) - the missile really does fly at
+		                                      // integer velocity, and the leftover fraction compounds
+		                                      // into whole units of drift over a multi-second arc
 	}
 	else
 	{
@@ -2738,6 +2877,9 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		muzzleBase[2] += cg.predictedPlayerState.viewheight;
 		VectorMA(muzzleBase, wt->muzzlePointOffset[1], right, muzzleBase);
 		VectorMA(muzzleBase, wt->muzzlePointOffset[2], up, muzzleBase);
+		SnapVector(muzzleBase); // matches CalcMuzzlePoint()'s own SnapVector(muzzlePoint) - muzzleBase
+		                        // is the client-side equivalent of muzzleEffect, which is always snapped
+		                        // before weapon_grenadelauncher_fire() ever touches it
 
 		VectorCopy(forward, throwForward);
 		if (pitch >= 0)
@@ -2755,7 +2897,11 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			pitch *= 0.3f;
 			pitch += 1.0f;
 		}
-		VectorNormalize(throwForward);
+		// VectorNormalizeFast, not VectorNormalize - weapon_grenadelauncher_fire() uses the fast
+		// reciprocal-sqrt approximation, which is only accurate to ~0.2%. That is enough to make the
+		// launch speed differ by a couple of units/s, which compounds into several units of drift by
+		// the end of a multi-second arc
+		VectorNormalizeFast(throwForward);
 
 		upangle  = -cg.predictedPlayerState.viewangles[PITCH];
 		upangle  = (upangle > 50.0f) ? 50.0f : upangle;
@@ -2778,24 +2924,40 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 
 		VectorMA(muzzleBase, 8, throwForward, pos);
 		pos[2] -= 8; // lower origin for the underhand throw
+		SnapVector(pos); // matches weapon_grenadelauncher_fire()'s own SnapVector(tosspos) call, made
+		                 // right before its validity trace - same sub-unit-precision reasoning as above
 
 		upangle *= pitch;
 		VectorScale(throwForward, upangle, velocity);
+		SnapVector(velocity); // G_PreFilledMissileEntity() snaps trDelta (g_misc.c) - see riflenade branch
 
-		// avoid launching from inside a wall - approximates weapon_grenadelauncher_fire's own
-		// viewpos->tosspos validity trace
+		// matches weapon_grenadelauncher_fire()'s own validity trace exactly (g_weapon.c), including
+		// its startsolid fallback that re-traces from 24 units BEHIND the player along the throw
+		// direction - and the fire table's boundingBox rather than the missile's zero-size bounds
 		{
-			vec3_t eyePos;
+			vec3_t viewpos;
 
-			VectorCopy(cg.predictedPlayerState.origin, eyePos);
-			eyePos[2] += cg.predictedPlayerState.viewheight;
+			VectorCopy(cg.predictedPlayerState.origin, viewpos);
+			viewpos[2] += cg.predictedPlayerState.viewheight;
 
-			CG_Trace(&trace, eyePos, NULL, NULL, pos, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
-			if (trace.fraction <= 0.0f)
+			CG_Trace(&trace, viewpos, launchMins, launchMaxs, pos, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+
+			if (trace.startsolid)
 			{
-				return qfalse; // launch point itself blocked
+				vec3_t throwDir;
+
+				VectorCopy(velocity, throwDir);
+				VectorNormalizeFast(throwDir);
+				VectorMA(cg.predictedPlayerState.origin, -24.f, throwDir, viewpos);
+
+				CG_Trace(&trace, viewpos, launchMins, launchMaxs, pos, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+				VectorCopy(trace.endpos, pos);
 			}
-			VectorCopy(trace.endpos, pos);
+			else if (trace.fraction < 1.0f)
+			{
+				VectorCopy(trace.endpos, pos);
+				CG_SnapVectorTowards(pos, viewpos);
+			}
 		}
 	}
 
@@ -2818,11 +2980,50 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 	                                      // (normal.z>0.2) bounce off world geometry sets it to ENTITYNUM_WORLD;
 	                                      // until that happens (e.g. bouncing off a wall first) every bounce
 	                                      // takes an EXTRA 0.5x velocity penalty on top of the usual 0.35x
+	vec3_t   lastOrigin;                 // mirrors ent->r.currentOrigin - NOT the same as `pos`, which
+	                                      // tracks the trajectory: the server only writes currentOrigin
+	                                      // at specific points, and the silent-destruction paths report
+	                                      // whatever it held then (that is where the EV_MORTAR_MISS
+	                                      // effect appears), which can be most of a frame behind `pos`
+	int      lastSurfaceFlags = 0;       // mirrors ent->lastSurfaceFlags: the SURF_SKY entry check is ORed
+	                                      // against the *previous* step's surfaceFlags too (g_missile.c:685),
+	                                      // not just the current one - catches a step that grazes a thin sky
+	                                      // face without itself registering SURF_SKY on the very next check
+	VectorCopy(pos, lastOrigin);
+
 	while (elapsed < MAX_TIME)
 	{
 		trajectory_t tr;
 		vec3_t       next;
-		int          step = ((elapsed + STEP) > MAX_TIME) ? (MAX_TIME - elapsed) : STEP;
+		int          step;
+		int          hitElapsed; // fractional hit time within the leg - used ONLY by the riflenade
+		                         // BOUNCE_EXPLODE rule below; `elapsed` itself advances a whole leg
+		                         // at a time, because a bounce re-bases the trajectory at the end of
+		                         // the server frame rather than at the moment of impact
+
+		// fuse timer elapsed - explodes right here, wherever that physically is (mid-air, mid-bounce,
+		// or settled - doesn't matter), matching the real think()-driven G_ExplodeMissile call exactly
+		if (fuseTime > 0 && elapsed >= fuseTime)
+		{
+			VectorCopy(pos, segStart);
+			VectorCopy(pos, segEnd);
+			if (trajPoints && numTrajPoints && *numTrajPoints < RIFLENADE_TRAJ_MAX_POINTS)
+			{
+				VectorCopy(pos, trajPoints[*numTrajPoints]);
+				(*numTrajPoints)++;
+			}
+			return qtrue;
+		}
+
+		step = (elapsed == 0) ? (STEP + PRESTEP) : STEP; // first server-side trace covers the prestep too
+		if ((elapsed + step) > MAX_TIME)
+		{
+			step = MAX_TIME - elapsed;
+		}
+		if (fuseTime > 0 && (elapsed + step) > fuseTime)
+		{
+			step = fuseTime - elapsed;
+		}
 
 		// sample a waypoint for the full-arc visual preview, independent of the fine STEP used
 		// for collision accuracy
@@ -2832,8 +3033,6 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			(*numTrajPoints)++;
 			nextRecordAt += RECORD_INTERVAL;
 		}
-		int          hitElapsed;
-
 		tr.trType = TR_GRAVITY;
 		tr.trTime = 0;
 		VectorCopy(pos, tr.trBase);
@@ -2845,6 +3044,22 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			vec3_t  probeEnd;
 			trace_t upTrace, downTrace;
 			qboolean keepFlying = qfalse;
+
+			// matches g_missile.c exactly: while flying through the sky, a missile whose X/Y strays
+			// outside the map's worldspawn "mapcoordsmins"/"mapcoordsmaxs" bounds is freed silently
+			// (G_FreeEntity - only a small EV_MORTAR_MISS effect, no real explosion) rather than
+			// exploding - this is checked every frame in that state, before the up/down sky probes
+			if (cg.mapcoordsValid &&
+			    (next[0] < cg.mapcoordsMins[0] || next[1] > cg.mapcoordsMins[1] ||
+			     next[0] > cg.mapcoordsMaxs[0] || next[1] < cg.mapcoordsMaxs[1]))
+			{
+				VectorCopy(lastOrigin, segEnd);
+				if (explodes)
+				{
+					*explodes = qfalse;
+				}
+				return qtrue;
+			}
 
 			// matches g_missile.c exactly: first confirm we're still under a sky ceiling above us -
 			// if that trace hits anything that ISN'T sky, we've somehow ended up on the wrong side
@@ -2860,7 +3075,13 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			}
 			else if (!(upTrace.surfaceFlags & SURF_SKY))
 			{
-				return qfalse; // destroyed silently, nothing to show
+				// destroyed silently - no explosion, but the flight up to here can still be shown
+				VectorCopy(lastOrigin, segEnd);
+				if (explodes)
+				{
+					*explodes = qfalse;
+				}
+				return qtrue;
 			}
 			else
 			{
@@ -2871,32 +3092,69 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 
 				if (downTrace.fraction >= 1.0f)
 				{
-					return qfalse; // fell below the world, destroyed silently
+					// fell below the world, destroyed silently - flight up to here can still be shown
+					VectorCopy(lastOrigin, segEnd);
+					if (explodes)
+					{
+						*explodes = qfalse;
+					}
+					return qtrue;
 				}
 				keepFlying = (downTrace.surfaceFlags & SURF_SKY) ? qtrue : qfalse;
 			}
 
-			if (keepFlying)
+			if (!keepFlying)
 			{
-				VectorCopy(pos, segStart);
-				VectorCopy(next, pos);
-				VectorCopy(pos, segEnd);
-				velocity[2] -= DEFAULT_GRAVITY * (step / 1000.0f);
-				elapsed       += step;
-				continue;
+				// re-entered real space below the sky shell - resume normal collision handling
+				inSky = qfalse;
 			}
 
-			// re-entered real space below the sky shell - resume normal collision handling
-			inSky = qfalse;
+			// matches g_missile.c exactly: the whole sky-state branch returns for this frame -
+			// including the "back in the world" case, whose `return` sits OUTSIDE the else, so the
+			// re-entry frame moves the missile but runs no collision trace at all. Falling straight
+			// through to the trace instead would start it from a point still embedded in the sky
+			// brush (startsolid), which immediately re-enters sky state off the sticky
+			// lastSurfaceFlags - collision then effectively gets sampled every frame instead of
+			// every other one, and the missile flies through walls the real one is stopped by
+			VectorCopy(pos, segStart);
+			VectorCopy(next, pos);
+			VectorCopy(pos, segEnd);
+			VectorCopy(next, lastOrigin); // server: VectorCopy(origin, ent->r.currentOrigin)
+			velocity[2] -= DEFAULT_GRAVITY * (step / 1000.0f);
+			elapsed      += step;
+			continue;
 		}
 
-		CG_Trace(&trace, pos, NULL, NULL, next, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+		CG_Trace(&trace, pos, missileMins, missileMaxs, next, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
 
-		// starting point embedded in solid (typically landing inside a thick sky brush after a
-		// previous pass-through step) - keep flying, can't be resolved into a bounce; elapsed is
-		// unconditionally advanced below so this can never spin forever
-		if (trace.fraction >= 1.0f || trace.allsolid || trace.startsolid)
+		// matches g_missile.c exactly: lastSurfaceFlags is refreshed on every non-startsolid trace
+		// (including a clean, non-impacting one - which normally clears it back to 0) - done BEFORE
+		// the fraction>=1 early-out below so the SURF_SKY check further down can still see it
+		VectorCopy(trace.endpos, lastOrigin); // server: VectorCopy(tr.endpos, ent->r.currentOrigin),
+		                                      // done before the startsolid fixup below
+
+		// matches g_missile.c exactly: a startsolid trace is turned into a fraction-0 hit and then
+		// handled by the SAME impact path as any other hit - it must NOT short-circuit into "keep
+		// flying", or a missile that ends a step embedded inside a thick sky brush never re-enters
+		// the sky-flying state below and instead sails straight through the surrounding solid
+		// geometry for the rest of the simulation. lastSurfaceFlags is deliberately left untouched
+		// here (still holding the previous step's SURF_SKY), which is exactly what makes the sky
+		// re-entry check below fire on those embedded steps.
+		if (trace.startsolid)
 		{
+			trace.fraction = 0.f;
+		}
+		else
+		{
+			lastSurfaceFlags = trace.surfaceFlags;
+		}
+
+		if (trace.fraction >= 1.0f)
+		{
+			// free fall with no intersection - g_missile.c resets groundEntityNum to ENTITYNUM_NONE
+			// on every such frame, so the "not on world floor" extra 0.5x bounce penalty applies
+			// again to the next bounce unless that bounce is itself flat world geometry
+			touchedWorldFloor = qfalse;
 			VectorCopy(pos, segStart);
 			VectorCopy(next, pos);
 			VectorCopy(pos, segEnd);
@@ -2909,8 +3167,9 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		// sky brushes commonly carry both flags together, and must still enter the sky-flying state
 		// rather than being treated as a silent no-impact removal. Only applies to weapons whose
 		// missile spawns with contents != CONTENTS_CORPSE (see skyPassthrough above) - dynamite/
-		// landmine/satchel bounce off sky brushes like normal solid geometry instead.
-		if (skyPassthrough && (trace.surfaceFlags & SURF_SKY))
+		// landmine/satchel bounce off sky brushes like normal solid geometry instead. Also matches
+		// g_missile.c:685 ORing in lastSurfaceFlags from the previous step, not just this one.
+		if (skyPassthrough && ((trace.surfaceFlags & SURF_SKY) || (lastSurfaceFlags & SURF_SKY)))
 		{
 			// enters the sky-flying state - forward collision is ignored from here on
 			inSky = qtrue;
@@ -2924,18 +3183,26 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 
 		if (trace.surfaceFlags & SURF_NOIMPACT)
 		{
-			// real: G_FreeEntity - destroyed silently, no explosion to show
-			return qfalse;
+			// real: G_FreeEntity - destroyed silently, no explosion, but still show the flight up
+			// to the point it vanished
+			VectorCopy(pos, segStart);
+			VectorCopy(trace.endpos, segEnd);
+			if (trajPoints && numTrajPoints && *numTrajPoints < RIFLENADE_TRAJ_MAX_POINTS)
+			{
+				VectorCopy(trace.endpos, trajPoints[*numTrajPoints]);
+				(*numTrajPoints)++;
+			}
+			if (explodes)
+			{
+				*explodes = qfalse;
+			}
+			return qtrue;
 		}
 
 		VectorCopy(pos, segStart);
 		VectorCopy(trace.endpos, segEnd);
 
 		hitElapsed = elapsed + (int)(step * trace.fraction);
-		if (hitElapsed <= elapsed)
-		{
-			hitElapsed = elapsed + 1; // guarantee forward progress even on a near-zero-fraction hit
-		}
 
 		// riflenades detonate on any bounce once more than BOUNCE_EXPLODE ms have elapsed since launch -
 		// this rule is riflenade-specific (WEAPON_TYPE_RIFLENADE check in G_BounceMissile); the
@@ -2978,10 +3245,19 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			{
 				return qtrue;
 			}
+
+			SnapVector(velocity); // G_BounceMissile snaps trDelta after every bounce that doesn't settle
 		}
 
-		VectorCopy(trace.endpos, pos);
-		elapsed = hitElapsed;
+		// G_BounceMissile nudges the missile one unit out along the impact plane's normal, snaps the
+		// result and re-bases the trajectory at level.time - i.e. at the END of the current server
+		// frame, not at the fractional impact time. The missile therefore sits at the bounce point
+		// for the rest of the frame and only resumes moving on the next one, so elapsed advances by
+		// the whole leg here rather than by step * fraction
+		VectorAdd(trace.endpos, trace.plane.normal, pos);
+		SnapVector(pos);
+		VectorCopy(pos, lastOrigin);
+		elapsed += step;
 	}
 	}
 
@@ -3037,6 +3313,7 @@ void CG_DrawRiflenadeTrajectoryRails(void)
 	static vec3_t   cachedPoints[RIFLENADE_TRAJ_MAX_POINTS];
 	static int      cachedCount     = 0;
 	static qboolean cachedValid     = qfalse;
+	static qboolean cachedExplodes  = qfalse;
 	static int      lastComputeTime = -9999;
 	const int       RECOMPUTE_INTERVAL = 25; // ms - caps the cost of the up-to-~400-step/frame trace
 	                                          // loop below to 40Hz regardless of render frame rate;
@@ -3056,9 +3333,11 @@ void CG_DrawRiflenadeTrajectoryRails(void)
 	if (CG_RiflenadeActivateHeld() && cg.time - lastComputeTime >= RECOMPUTE_INTERVAL)
 	{
 		vec3_t   segStart, segEnd;
-		qboolean ok = CG_PredictRiflenadeTrajectory(segStart, segEnd, cachedPoints, &cachedCount);
+		qboolean explodes;
+		qboolean ok = CG_PredictRiflenadeTrajectory(segStart, segEnd, cachedPoints, &cachedCount, &explodes);
 
 		lastComputeTime = cg.time;
+		cachedExplodes  = explodes;
 
 		if (ok)
 		{
@@ -3083,6 +3362,7 @@ void CG_DrawRiflenadeTrajectoryRails(void)
 		CG_RailTrail2(color, cachedPoints[i], cachedPoints[i + 1], i, RIFLENADE_TRAJ_RAIL_SIDENUM);
 	}
 
+	if (cachedExplodes)
 	{
 		vec3_t travelDir;
 		vec3_t markerColor = { 1.0f, 0.0f, 0.0f }; // red, distinct from the orange trajectory trail
