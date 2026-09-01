@@ -3907,6 +3907,21 @@ static void CreateInternalShaders(void)
 	Q_strncpyz(shader.name, "<stencil shadow>", sizeof(shader.name));
 	shader.sort     = SS_STENCIL_SHADOW;
 	tr.shadowShader = FinishShader();
+
+	// translucent, per-vertex-colored shader with no texture asset dependency - used by
+	// cl_tc_vis.c to visualize collision brushes (clips/triggers/slicks/sky) directly from
+	// engine-side geometry, independent of any loaded map/mod shader scripts. Normal alpha
+	// blending (not additive) so the true per-brush color shows instead of washing out to
+	// white/yellow over bright surfaces.
+	InitShader("<tcRender>", LIGHTMAP_NONE);
+	shader.polygonOffset        = qtrue;
+	shader.noPicMip             = qtrue;
+	stages[0].bundle[0].image[0] = tr.whiteImage;
+	stages[0].active            = qtrue;
+	stages[0].rgbGen            = CGEN_VERTEX;
+	stages[0].alphaGen          = AGEN_VERTEX;
+	stages[0].stateBits         = GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
+	tr.tcRenderShader           = FinishShader();
 }
 
 static void CreateExternalShaders(void)

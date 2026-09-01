@@ -1098,6 +1098,16 @@ void RE_EndRegistration(void)
 
 void R_DebugPolygon(int color, int numPoints, float *points);
 
+/**
+ * @brief RE_GetTcRenderShader
+ * @return the qhandle_t of the internal translucent per-vertex-colored shader used by
+ * cl_tc_vis.c to visualize collision brushes, or 0 if it hasn't been created yet
+ */
+static qhandle_t RE_GetTcRenderShader(void)
+{
+	return tr.tcRenderShader ? tr.tcRenderShader->index : 0;
+}
+
 #ifdef USE_RENDERER_DLOPEN
 /**
  * @brief GetRefAPI
@@ -1160,6 +1170,8 @@ refexport_t *GetRefAPI(int apiVersion, refimport_t *rimp)
 	re.SetFog           = R_SetFog;
 
 	re.RenderScene = RE_RenderScene;
+
+	re.GetTcRenderShader = RE_GetTcRenderShader;
 
 	re.SetColor               = RE_SetColor;
 	re.DrawStretchPic         = RE_StretchPic;

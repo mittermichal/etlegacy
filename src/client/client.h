@@ -809,6 +809,10 @@ void CL_ShaderStateChanged(void);
 void CL_UpdateLevelHunkUsage(void);
 void CL_CGameBinaryMessageReceived(const byte *buf, int buflen, int serverTime);
 qboolean CL_GetSnapshot(int snapshotNumber, snapshot_t *snapshot);
+
+// cl_tc_vis.c
+void tc_vis_init(void);
+void tc_vis_render(void);
 qboolean CL_GetServerCommand(int serverCommandNumber);
 int CL_FindIncrementThreshold(void);
 void CL_AdjustTimeDelta(void);

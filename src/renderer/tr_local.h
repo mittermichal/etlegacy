@@ -1413,6 +1413,8 @@ typedef struct
 	shader_t *shadowShader;
 	shader_t *projectionShadowShader;
 	shader_t *dlightShader;
+	shader_t *tcRenderShader;                   ///< translucent, per-vertex-colored, additive - used to
+	                                             ///< visualize collision brushes (see cl_tc_vis.c)
 
 	shader_t *flareShader;
 	char *sunShaderName;

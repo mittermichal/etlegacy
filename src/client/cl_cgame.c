@@ -671,6 +671,8 @@ void CL_CM_LoadMap(const char *mapname)
 	Con_ScrollBottom();
 
 	CM_LoadMap(mapname, qtrue, &checksum);
+
+	tc_vis_init();
 }
 
 /**
@@ -899,6 +901,9 @@ intptr_t CL_CgameSystemCalls(intptr_t *args)
 		re.SetGlobalFog(args[1], args[2], VMF(3), VMF(4), VMF(5), VMF(6));
 		return 0;
 	case CG_R_RENDERSCENE:
+		// must run before RenderScene - AddPolyToScene calls made after the scene is rendered
+		// are queued too late to appear in the frame that was just drawn
+		tc_vis_render();
 		re.RenderScene(VMA(1));
 		return 0;
 	case CG_R_SAVEVIEWPARMS:

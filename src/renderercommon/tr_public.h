@@ -95,6 +95,11 @@ typedef struct
 	void (*SetFog)(int fogvar, int var1, int var2, float r, float g, float b, float density);
 	void (*RenderScene)(const refdef_t *fd);
 
+	/// translucent, per-vertex-colored shader with no shader-script/asset dependency, used to
+	/// visualize collision brushes (see cl_tc_vis.c). This function pointer itself may be NULL on
+	/// a renderer backend that hasn't implemented it - callers must null-check before calling it.
+	qhandle_t (*GetTcRenderShader)(void);
+
 	void (*SetColor)(const float *rgba);        /// NULL = 1,1,1,1
 	void (*DrawStretchPic)(float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t hShader);          /// 0 = white
 	void (*DrawRotatedPic)(float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t hShader, float angle);         /// NERVE - SMF
