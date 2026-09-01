@@ -4372,8 +4372,12 @@ void CG_DrawFollow(hudComponent_t *comp);
 void CG_DrawMissileCamera(hudComponent_t *comp);
 #define RIFLENADE_TRAJ_MAX_POINTS 48
 qboolean CG_RiflenadeActivateHeld(void);
-qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes);
+qboolean CG_IsPreviewableWeapon(weapon_t weapon);
+qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes, qboolean *hitTarget);
 void CG_DrawRiflenadeTrajectoryRails(void);
+void CG_MissileTarget_f(void);
+qboolean CG_MissileTargetActive(void);
+int CG_PredictSplashDamage(const vec3_t explosionPoint, weapon_t weapon, float *distOut, qboolean *blockedOut);
 void CG_DrawTeamInfo(hudComponent_t *comp);
 void CG_DrawSpectator(hudComponent_t *comp);
 void CG_DrawPMItemsBig(hudComponent_t *comp);

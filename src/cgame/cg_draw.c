@@ -4832,6 +4832,46 @@ void CG_DrawActive()
 	}
 }
 
+/**
+ * @brief Colour code for a predicted damage figure, escalating with severity: white when the target
+ * is untouched, yellow for a survivable hit, orange past the halfway mark and red once the damage
+ * alone would drop a full-health player.
+ * @return an ET colour code to embed in the string (q_shared.h)
+ */
+static const char *CG_MissileDamageColorCode(int damage)
+{
+	if (damage <= 0)
+	{
+		return S_COLOR_WHITE;
+	}
+
+	if (damage < 50)
+	{
+		return S_COLOR_YELLOW;
+	}
+
+	return (damage < 100) ? S_COLOR_ORANGE : S_COLOR_RED;
+}
+
+/**
+ * @brief Draws one line of text flush with the BOTTOM edge of a component instead of its top.
+ * CG_DrawCompText paints the baseline at location.y + MAX(location.h, textHeight), so handing it a
+ * copy of the component exactly one line tall, moved down to the bottom edge, puts the line inside
+ * the camera view. The text scale is unaffected: CG_ComputeScale reads only hardScale and scale,
+ * never the height.
+ */
+static void CG_DrawCompTextBottom(hudComponent_t *comp, const char *str, vec4_t color, fontHelper_t *font)
+{
+	hudComponent_t bottom = *comp;
+	float          scale  = CG_ComputeScale(comp);
+	float          textH  = CG_Text_Height_Ext(str, scale, 0, font);
+
+	bottom.location.h = textH;
+	bottom.location.y = comp->location.y + comp->location.h - textH;
+
+	CG_DrawCompText(&bottom, str, color, comp->styleText, font);
+}
+
 void CG_DrawMissileCamera(hudComponent_t *comp)
 {
 	float     x, y, w, h;
@@ -4844,6 +4884,10 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	qboolean  usingPrediction = qfalse;
 	qboolean  predExplodes    = qfalse; // qfalse whenever predEnd is just where the missile vanished
 	                                     // (SURF_NOIMPACT, out-of-world, ...) rather than a real impact
+	qboolean  predHitTarget   = qfalse; // the predicted detonation is a DIRECT hit on the missiletarget
+	char      targetInfo[64];           // missiletarget damage readout, empty when no marker is placed
+
+	targetInfo[0] = '\0';
 
 	if (cgs.matchPaused)
 	{
@@ -4856,7 +4900,7 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	}
 	else if ((cgs.sv_cheats || cg.demoPlayback) &&
 	         CG_RiflenadeActivateHeld() &&
-	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints, &predExplodes))
+	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints, &predExplodes, &predHitTarget))
 	{
 		usingPrediction = qtrue;
 	}
@@ -4992,16 +5036,42 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 		CG_Trace(&groundTrace, queryPoint, NULL, NULL, groundTraceEnd, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
 		groundDist = groundTrace.fraction * 8192.0f;
 
+		// splash damage a \missiletarget marker would take from this explosion - raw, before the
+		// server's own friendly fire rules, class skills and armor apply in G_Damage
+		if (CG_MissileTargetActive())
+		{
+			float    targetDist;
+			qboolean blocked;
+			// the real-missile path must use the missile's own weapon, not whatever is held now -
+			// the player may already have switched away while it was still in the air
+			weapon_t dmgWeapon = usingPrediction ? cg.predictedPlayerState.weapon : (weapon_t)cent->currentState.weapon;
+			int      dmg       = CG_PredictSplashDamage(queryPoint, dmgWeapon, &targetDist, &blocked);
+
+			// panzerfaust/bazooka and the mortar also deal weapon table `damage` straight to whatever
+			// they strike, on top of the splash from that same point (G_MissileImpact -> G_Damage,
+			// then G_ExplodeMissile). Everything that bounces has damage 0, so this only ever adds
+			// something for the two detonate-on-contact weapons - and only on a genuine direct hit
+			if (predHitTarget)
+			{
+				dmg += GetWeaponTableData(dmgWeapon)->damage;
+			}
+
+			// the colour code runs to the end of the string, so the whole damage clause has to come
+			// last - the distance stays ahead of it and keeps the component's main colour
+			Q_strncpyz(targetInfo, va(" | %.0fu %s%i dmg%s%s", targetDist, CG_MissileDamageColorCode(dmg), dmg,
+			                          predHitTarget ? " DIRECT" : "", blocked ? " (no LOS)" : ""), sizeof(targetInfo));
+		}
+
 		// z is always shown; the ground-distance prefix is only meaningful (and only added) once
 		// the point is actually off the floor - previously the whole line, z included, was skipped
 		// whenever groundDist was ~0 (e.g. the explosion happened right at ground level)
 		if (groundDist > 1.0f)
 		{
-			CG_DrawCompText(comp, va("%.0f (z:%.0f)", groundDist, queryPoint[2]), comp->colorMain, comp->styleText, &cgs.media.limboFont2);
+			CG_DrawCompTextBottom(comp, va("%.0f (z:%.0f)%s", groundDist, queryPoint[2], targetInfo), comp->colorMain, &cgs.media.limboFont2);
 		}
 		else
 		{
-			CG_DrawCompText(comp, va("z:%.0f", queryPoint[2]), comp->colorMain, comp->styleText, &cgs.media.limboFont2);
+			CG_DrawCompTextBottom(comp, va("z:%.0f%s", queryPoint[2], targetInfo), comp->colorMain, &cgs.media.limboFont2);
 		}
 	}
 	else if (usingPrediction && !predExplodes)
