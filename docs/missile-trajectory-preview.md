@@ -35,10 +35,7 @@ by deleting the files again.
    page explains the full layout. If those folders do not match your install, type `/fs_homepath`
    in the console — it prints the folder the game is actually using.)
 
-3. **Back up whatever is already in there** — at minimum the existing `legacy_*.pk3` and `qagame`
-   file — so you can put your normal install back afterwards.
-
-4. Extract the zip into that folder. You need two files:
+3. Extract the zip into that folder. You need two files:
 
    - `legacy_<version>.pk3`
    - the `qagame` for your system:
@@ -56,23 +53,28 @@ by deleting the files again.
    an ETLTV server. Deleting them is optional and saves a bit of disk space; leaving them does no
    harm.
 
-5. **Make sure only one `legacy_*.pk3` is left in the folder.** With two versions side by side it
-   is not obvious which one the game picks, and the usual symptom is the feature simply not
-   appearing.
+   You are *adding* files here, not replacing any. The mod that came with the game lives in the
+   install folder, and this folder normally holds only your configs, demos and screenshots. What
+   you put here wins over the installed version, which is exactly what makes this work.
 
-6. Start ET:Legacy.
+4. **Make sure only one `legacy_*.pk3` is left in this folder.** The one in the game's install
+   folder is fine and should stay — but two of them *here* is ambiguous, and the usual symptom is
+   the feature simply not appearing.
 
-7. **Check it loaded.** The mod version is printed in the **bottom-left corner of the main menu**,
+5. Start ET:Legacy.
+
+6. **Check it loaded.** The mod version is printed in the **bottom-left corner of the main menu**,
    straight after launch — no need to join anything. It should read `v2.85.0-missile-sim2` (or
    whichever release you installed) instead of the plain `v2.85.0` of a stock install. Pressing
    `Escape` while connected to a server brings up the same menu, showing the version the server
    loaded.
 
    That text comes from the same pk3 as the rest of the client half, so if the version is right
-   there, the preview is installed. It says nothing about the `qagame` from step 4 — that one you
+   there, the preview is installed. It says nothing about the `qagame` from step 3 — that one you
    have to get right yourself.
 
-To go back to your normal install, delete these files and restore the ones you backed up in step 3.
+To uninstall, delete the two files you added. The game falls back to the mod in its install
+folder, exactly as before.
 
 ## Alternative: install side by side, without touching your normal setup
 
@@ -103,7 +105,7 @@ playing sits there rather than in `etmain` itself, and `/devmap` will not find i
 pk3s you care about from `etmain/dlcache` into `etmain` — in the new directory or your usual one,
 the same applies either way.
 
-Then install the mod into the **new** folder's `legacy` directory, following steps 1 and 4 above.
+Then install the mod into the **new** folder's `legacy` directory, following steps 1 and 3 above.
 Nothing in your original folder changes, so there is nothing to back up or restore.
 
 ### 2. Add the startup argument
@@ -152,7 +154,7 @@ Use Automator to make a small launcher app:
 ### 3. Launch and check
 
 Start the game through the new shortcut and check the version in the bottom-left of the main menu,
-as in step 7 above. To confirm the separate directory took effect, type `/fs_homepath` in the
+as in step 6 above. To confirm the separate directory took effect, type `/fs_homepath` in the
 console — it should print the new path, not your usual one.
 
 ## Turning it on
