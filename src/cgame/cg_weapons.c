@@ -2683,30 +2683,100 @@ qboolean CG_MissileTargetActive(void)
 }
 
 /**
+ * @brief Prints the exact command that would put the marker back where it is now.
+ * The marker lives in cgame statics, so a cgame_restart (or a map change, or simply quitting)
+ * throws it away - which is a nuisance mid-investigation, when the whole point is to keep aiming
+ * at one fixed spot across module reloads. Echoing the full 9-argument form makes it a copy-paste
+ * away, and keeps the numbers at a precision that actually round-trips.
+ */
+static void CG_MissileTargetPrintRestoreCmd(void)
+{
+	CG_Printf("missiletarget %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
+	          cg_missileTargetOrigin[0], cg_missileTargetOrigin[1], cg_missileTargetOrigin[2],
+	          cg_missileTargetMins[0], cg_missileTargetMins[1], cg_missileTargetMins[2],
+	          cg_missileTargetMaxs[0], cg_missileTargetMaxs[1], cg_missileTargetMaxs[2]);
+}
+
+/**
  * @brief Toggles the missiletarget marker: places it at the player's current position and collision
  * box, or clears an existing one.
+ *
+ * With arguments it always places (never toggles), so a marker can be restored after the statics
+ * holding it are gone:
+ *   missiletarget                                 - toggle at own position/collision box
+ *   missiletarget <x> <y> <z>                     - place there, own live collision box
+ *   missiletarget <x> <y> <z> <mins...> <maxs...> - place there with an explicit box, the form
+ *                                                   printed on every successful placement
  */
 void CG_MissileTarget_f(void)
 {
-	if (cg_missileTargetActive)
+	// parsed into locals and only committed to the statics once every argument has checked out - a
+	// rejected command must leave an already-placed marker exactly where it was
+	vec3_t origin, mins, maxs;
+	int    argc = trap_Argc();
+
+	if (argc != 1 && argc != 4 && argc != 10)
+	{
+		CG_Printf("usage: missiletarget [x y z [minx miny minz maxx maxy maxz]]\n");
+		if (cg_missileTargetActive)
+		{
+			CG_Printf("current marker: ");
+			CG_MissileTargetPrintRestoreCmd();
+		}
+		return;
+	}
+
+	// only the bare form toggles - re-running it with coordinates is a re-place, otherwise restoring
+	// a marker would need a "is one already up?" check at every call site that pastes the command
+	if (argc == 1 && cg_missileTargetActive)
 	{
 		cg_missileTargetActive = qfalse;
 		CG_Printf("missiletarget: cleared\n");
 		return;
 	}
 
-	// ps.mins/maxs is the live collision box - it already tracks crouching and prone, and is the
-	// very box the server offsets its CanDamage() line-of-sight corner traces by (g_combat.c)
-	VectorCopy(cg.predictedPlayerState.origin, cg_missileTargetOrigin);
-	VectorCopy(cg.predictedPlayerState.mins, cg_missileTargetMins);
-	VectorCopy(cg.predictedPlayerState.maxs, cg_missileTargetMaxs);
+	if (argc == 1)
+	{
+		VectorCopy(cg.predictedPlayerState.origin, origin);
+	}
+	else
+	{
+		VectorSet(origin, Q_atof(CG_Argv(1)), Q_atof(CG_Argv(2)), Q_atof(CG_Argv(3)));
+	}
+
+	if (argc == 10)
+	{
+		VectorSet(mins, Q_atof(CG_Argv(4)), Q_atof(CG_Argv(5)), Q_atof(CG_Argv(6)));
+		VectorSet(maxs, Q_atof(CG_Argv(7)), Q_atof(CG_Argv(8)), Q_atof(CG_Argv(9)));
+
+		if (mins[0] >= maxs[0] || mins[1] >= maxs[1] || mins[2] >= maxs[2])
+		{
+			// an inside-out box makes trap_CM_TempBoxModel produce a hull nothing can ever hit,
+			// which would silently look like "the marker is there but the missile flies through it"
+			CG_Printf("missiletarget: mins must be less than maxs on every axis\n");
+			return;
+		}
+	}
+	else
+	{
+		// ps.mins/maxs is the live collision box - it already tracks crouching and prone, and is the
+		// very box the server offsets its CanDamage() line-of-sight corner traces by (g_combat.c)
+		VectorCopy(cg.predictedPlayerState.mins, mins);
+		VectorCopy(cg.predictedPlayerState.maxs, maxs);
+	}
+
+	VectorCopy(origin, cg_missileTargetOrigin);
+	VectorCopy(mins, cg_missileTargetMins);
+	VectorCopy(maxs, cg_missileTargetMaxs);
 	cg_missileTargetActive = qtrue;
 
-	CG_Printf("missiletarget: placed at (%.0f %.0f %.0f), box %.0fx%.0fx%.0f - run again to clear\n",
+	CG_Printf("missiletarget: placed at (%.0f %.0f %.0f), box %.0fx%.0fx%.0f - run bare to clear\n",
 	          cg_missileTargetOrigin[0], cg_missileTargetOrigin[1], cg_missileTargetOrigin[2],
 	          cg_missileTargetMaxs[0] - cg_missileTargetMins[0],
 	          cg_missileTargetMaxs[1] - cg_missileTargetMins[1],
 	          cg_missileTargetMaxs[2] - cg_missileTargetMins[2]);
+	CG_Printf("to restore it later: ");
+	CG_MissileTargetPrintRestoreCmd();
 }
 
 /**
