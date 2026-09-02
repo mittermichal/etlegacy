@@ -138,3 +138,10 @@ ordering bug, not a physics bug.
 - `VectorNormalize` vs `VectorNormalizeFast` matters: ~0.2% per step compounds into whole units.
 - `WP_KAR98`/`WP_CARBINE` have `splashDamage` 0 — riflenade damage comes from their `weapAlts`.
 - `G_ExplodeMissile` raises the blast origin 4 units for `WP_DYNAMITE` before radius damage.
+- **Crouch and prone do not shrink a player against explosives.** `ps.mins/maxs` and the linked
+  `r.mins/maxs` are both set once from `playerMins`/`playerMaxs` (36x36x72) and only change on
+  death; the pose-dependent height (`ClientHitboxMaxZ`, `ps.crouchMaxZ`) is applied *only* on the
+  hitscan paths — `g_antilag.c` server-side, and the `cg.bulletTrace` branch of
+  `CG_ClipMoveToEntities` client-side. A missile trace and `CanDamage`'s corner offsets both see the
+  standing box regardless of pose, so `missiletarget` capturing `ps.mins/maxs` is faithful, not a
+  missing feature.

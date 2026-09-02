@@ -2759,8 +2759,15 @@ void CG_MissileTarget_f(void)
 	}
 	else
 	{
-		// ps.mins/maxs is the live collision box - it already tracks crouching and prone, and is the
-		// very box the server offsets its CanDamage() line-of-sight corner traces by (g_combat.c)
+		// ps.mins/maxs is the STANDING box and stays that way: ClientSpawn copies playerMins/playerMaxs
+		// into it once (g_client.c) and nothing but death touches it again - crouching and prone live
+		// in ps.crouchMaxZ and the animation-derived ClientHitboxMaxZ() instead. That is the right box
+		// here anyway, because it is exactly what the splash path uses: CanDamage() offsets its
+		// line-of-sight corner traces by ps.mins/maxs (g_combat.c), and a missile's trap_Trace clips
+		// against the entity's linked r.mins/maxs, which is the same standing box. Only hitscan
+		// narrows a player down to their pose, via the antilag path on the server (g_antilag.c) and
+		// the `cg.bulletTrace` branch in CG_ClipMoveToEntities on the client - neither of which a
+		// grenade ever goes through. Pass an explicit box if you want to model something else.
 		VectorCopy(cg.predictedPlayerState.mins, mins);
 		VectorCopy(cg.predictedPlayerState.maxs, maxs);
 	}
