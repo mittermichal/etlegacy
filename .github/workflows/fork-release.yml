@@ -362,9 +362,19 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           ls -la
+
+          # Install/usage docs, if this branch carries any. Linked at the built commit rather than
+          # at a branch name, so the instructions can never drift away from the binaries attached
+          # here. The API call keeps a branch without docs from getting a 404 link.
+          notes="Fork build of ${{needs.pre-build.outputs.describe}} from branch \`${{ github.ref_name }}\` (${{ github.sha }})"
+          doc="docs/missile-trajectory-preview.md"
+          if gh api "repos/${GH_REPO}/contents/${doc}?ref=${{ github.sha }}" --silent 2>/dev/null; then
+            notes="$notes"$'\n\n'"**[Installation and usage](https://github.com/${GH_REPO}/blob/${{ github.sha }}/${doc})**"
+          fi
+
           gh release create "$RELEASE_TAG" \
             --title "$RELEASE_TAG (${{ github.ref_name }})" \
             --target "${{ github.sha }}" \
-            --notes "Fork build of ${{needs.pre-build.outputs.describe}} from branch \`${{ github.ref_name }}\` (${{ github.sha }})" \
+            --notes "$notes" \
             ${{ inputs.prerelease && '--prerelease' || '' }} \
             etlegacy-mod-*.zip legacy_*.pk3
