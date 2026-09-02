@@ -3024,7 +3024,7 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 	// everything that bounces, whose own fuseTime (below) normally ends the loop first. A mortar shell
 	// needs far longer: it leaves at 1650u/s vertically, so it is still climbing past the 2s mark and
 	// a full arc back down to launch height takes over 4s on its own
-	const int     MAX_TIME       = isMortar ? 12000 : 4000;
+	const int     MAX_TIME       = isMortar ? 12000 : 4500;
 	const int     BOUNCE_EXPLODE = 750;  // g_missile.c: riflenade explodes ~750ms after launch once it has bounced;
 	                                      // does not apply to the throwable family (see isRiflenade checks below)
 	// throwable family (grenades/smoke marker/smoke bomb) explodes on a fixed fuse timer
@@ -3043,11 +3043,21 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 	// PRESTEP is added because `elapsed` below is measured from the missile's trTime, which is
 	// backdated by MISSILE_PRESTEP_TIME, while nextthink is set from the (later) fire frame -
 	// without it the predicted explosion lands two server frames short along the arc
-	const int     fuseTime = (!isRiflenade && wt->grenadeTime > 0)
-	                          ? (((cg.predictedPlayerState.grenadeTimeLeft > 0)
-	                              ? cg.predictedPlayerState.grenadeTimeLeft
-	                              : (wt->grenadeTime - wt->fireDelayTime)) + PRESTEP)
-	                          : 0;
+	// the riflenade has no grenadeTime, but it does carry a think timeout: G_PreFilledMissileEntity
+	// sets nextthink = level.time + the fire table's nextThink (4000 for WP_GPG40/WP_M7), and
+	// G_ExplodeMissile is that think. It needs the same PRESTEP correction, and getting that 50ms
+	// wrong is not academic - measured live, a riflenade that survives its whole flight was freed
+	// silently by the sky check at elapsed 4025, inside the window a 4000 cap cut off, so the preview
+	// ran out of simulation while the round was still airborne and reported an explosion that never
+	// happened
+	const int     RIFLENADE_THINK = 4000;
+	const int     fuseTime = isRiflenade
+	                          ? (RIFLENADE_THINK + PRESTEP)
+	                          : ((wt->grenadeTime > 0)
+	                             ? (((cg.predictedPlayerState.grenadeTimeLeft > 0)
+	                                 ? cg.predictedPlayerState.grenadeTimeLeft
+	                                 : (wt->grenadeTime - wt->fireDelayTime)) + PRESTEP)
+	                             : 0);
 
 	RECORD_INTERVAL = MAX_TIME / (RIFLENADE_TRAJ_MAX_POINTS - 1);
 
@@ -3345,7 +3355,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		{
 			vec3_t  probeEnd;
 			trace_t upTrace, downTrace;
-			qboolean keepFlying = qfalse;
+			qboolean keepFlying   = qfalse;
+			qboolean updateOrigin = qtrue; // mirrors whether this sky sub-path writes r.currentOrigin
 
 			// matches g_missile.c exactly: while flying through the sky, a missile whose X/Y strays
 			// outside the map's worldspawn "mapcoordsmins"/"mapcoordsmaxs" bounds is freed silently
@@ -3403,12 +3414,37 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 					return qtrue;
 				}
 				keepFlying = (downTrace.surfaceFlags & SURF_SKY) ? qtrue : qfalse;
+				// matches g_missile.c exactly: the "above the sky limit" branch calls G_RunThink and
+				// returns WITHOUT touching r.currentOrigin, unlike every other sky sub-path
+				updateOrigin = !keepFlying;
 			}
 
 			if (!keepFlying)
 			{
 				// re-entered real space below the sky shell - resume normal collision handling
 				inSky = qfalse;
+			}
+
+			// matches g_missile.c exactly: both "keep flying" sky sub-paths call G_RunThink BEFORE
+			// r.currentOrigin is brought forward to this frame's position (and the "above the sky
+			// limit" one never brings it forward at all), so a think()-driven G_ExplodeMissile fired
+			// from up here detonates a whole server frame BEHIND the missile's actual position. The
+			// in-world path is the other way round - currentOrigin is written from the trace first,
+			// then G_RunThink runs at the very end of G_RunMissile - which is what the top-of-loop
+			// fuse check above models. Getting this wrong put the burst one 25ms step too far along
+			// the arc: ~28 units downrange and ~40 units too low for a descending riflenade, enough
+			// to move it from "on the ceiling above the target" to "next to the target".
+			// The "back in the world" re-entry frame runs no think at all, hence keepFlying here.
+			if (keepFlying && fuseTime > 0 && (elapsed + step) >= fuseTime)
+			{
+				VectorCopy(pos, segStart);
+				VectorCopy(lastOrigin, segEnd);
+				if (trajPoints && numTrajPoints && *numTrajPoints < RIFLENADE_TRAJ_MAX_POINTS)
+				{
+					VectorCopy(lastOrigin, trajPoints[*numTrajPoints]);
+					(*numTrajPoints)++;
+				}
+				return qtrue;
 			}
 
 			// matches g_missile.c exactly: the whole sky-state branch returns for this frame -
@@ -3421,7 +3457,10 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			VectorCopy(pos, segStart);
 			VectorCopy(next, pos);
 			VectorCopy(pos, segEnd);
-			VectorCopy(next, lastOrigin); // server: VectorCopy(origin, ent->r.currentOrigin)
+			if (updateOrigin)
+			{
+				VectorCopy(next, lastOrigin); // server: VectorCopy(origin, ent->r.currentOrigin)
+			}
 			velocity[2] -= gravity * (step / 1000.0f);
 			elapsed      += step;
 			continue;
@@ -3578,6 +3617,14 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		VectorCopy(pos, lastOrigin);
 		elapsed += step;
 	}
+	}
+
+	// ran out of simulation with the missile still in the air and no fuse or think deadline reached -
+	// the outcome is simply unknown, so do not claim an explosion. Anything with a real deadline
+	// (riflenade think, throwable fuse) returns above long before this
+	if (explodes)
+	{
+		*explodes = qfalse;
 	}
 
 	return qtrue;
