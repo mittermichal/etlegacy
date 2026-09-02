@@ -15,7 +15,8 @@ This is a mod, not a new game build — it runs on your normal ET:Legacy client,
 by deleting the files again.
 
 1. Download **`etlegacy-mod-<version>.zip`** from the
-   [releases page](https://github.com/mittermichal/etlegacy/releases) (~55 MB).
+   [releases page](https://github.com/mittermichal/etlegacy/releases) (~55 MB). The download links
+   are hidden behind the **Assets** heading at the bottom of a release — click it to expand.
 
    Download the whole zip, not just the `legacy_<version>.pk3` next to it. The pk3 holds only the
    client-side part of the mod; the `qagame` files in the zip are the server-side half. Because the
