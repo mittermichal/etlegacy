@@ -4371,11 +4371,75 @@ void CG_DrawLimboMessage(hudComponent_t *comp);
 void CG_DrawFollow(hudComponent_t *comp);
 void CG_DrawMissileCamera(hudComponent_t *comp);
 #define RIFLENADE_TRAJ_MAX_POINTS 48
+#define RIFLENADE_SIM_MAX_EVENTS  16
+
+/**
+ * @enum riflenadeSimEventType_t
+ * @brief Why the simulated missile did not stop where it visually should have. The simulation
+ * mirrors G_RunMissile, which switches collision off entirely while a missile is in "sky state",
+ * so a round genuinely can cross solid geometry - these are the places to look when a shot
+ * seemingly passes through a wall. Diagnostic only: nothing here changes the predicted trajectory.
+ */
+typedef enum
+{
+	RSE_SKY_ENTER = 0,  ///< trace hit a SURF_SKY face - forward collision is ignored from here on
+	RSE_SKY_STICKY,     ///< this step hit real geometry but was diverted into sky state anyway,
+	                    ///< because the PREVIOUS step's lastSurfaceFlags still held SURF_SKY
+	RSE_SKY_BLIND,      ///< shadow trace on a sky-state step: geometry the missile flew straight
+	                    ///< through while collision was off
+	RSE_SKY_REENTER,    ///< the "back in the world" step, which runs no collision trace at all
+	RSE_SKY_BACKFACE,   ///< up-probe hit a non-sky face - freed silently on the wrong side of the shell
+	RSE_NOIMPACT,       ///< SURF_NOIMPACT - freed silently, no explosion
+	RSE_STARTSOLID,     ///< the step began embedded in a brush
+	RSE_MISSILECLIP,    ///< stopped by a brush with no visible surface (CONTENTS_MISSILECLIP)
+	RSE_OUTOFBOUNDS,    ///< strayed outside worldspawn mapcoords while in sky state
+	RSE_BELOWWORLD      ///< nothing below it while in sky state - fell out of the world
+} riflenadeSimEventType_t;
+
+/**
+ * @struct riflenadeSimEvent_t
+ * @brief One logged point of interest along a simulated trajectory. `surfaceFlags`/`contents` are
+ * whatever the trace that produced the event reported - both read 0 for an entity hit, so check
+ * `entityNum` against ENTITYNUM_WORLD before decoding them.
+ */
+typedef struct
+{
+	riflenadeSimEventType_t type;
+	int    surfaceFlags;
+	int    lastSurfaceFlags;   ///< the PREVIOUS step's flags, which the sky check is ORed against
+	int    contents;
+	int    entityNum;
+	int    elapsed;            ///< ms since launch, in the same 25ms steps the server logs
+	vec3_t origin;
+	int    trajPointIdx;       ///< index into trajPoints the event sits at, for drawing markers
+} riflenadeSimEvent_t;
+
+// per-trajPoints tags, so the arc can be drawn in a different colour where collision was off.
+// Strictly ordered - CG_TagSimPoint only ever upgrades a point's tag, never lowers it
+#define RPT_NORMAL 0
+#define RPT_SKY    1  ///< recorded while in sky state (collision disabled)
+#define RPT_BLIND  2  ///< sky-state leg where a shadow trace found real geometry in the way
+
+/**
+ * @struct riflenadeSimLog_t
+ * @brief Optional diagnostic output of CG_PredictRiflenadeTrajectory. Zeroed by the simulation on
+ * entry, so it needs no initialisation at the call site.
+ */
+typedef struct
+{
+	int                 numEvents;
+	int                 numPassthrough; ///< subset of events that put the missile through geometry
+	riflenadeSimEvent_t events[RIFLENADE_SIM_MAX_EVENTS];
+	byte                pointTags[RIFLENADE_TRAJ_MAX_POINTS];
+} riflenadeSimLog_t;
+
 qboolean CG_RiflenadeActivateHeld(void);
 qboolean CG_IsPreviewableWeapon(weapon_t weapon);
-qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes, qboolean *hitTarget);
+qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes, qboolean *hitTarget, riflenadeSimLog_t *simLog);
 void CG_DrawRiflenadeTrajectoryRails(void);
 void CG_MissileTarget_f(void);
+void CG_MissileSurfs_f(void);
+const char *CG_SimEventName(riflenadeSimEventType_t type);
 qboolean CG_MissileTargetActive(void);
 int CG_PredictSplashDamage(const vec3_t explosionPoint, weapon_t weapon, float *distOut, qboolean *blockedOut);
 void CG_DrawTeamInfo(hudComponent_t *comp);

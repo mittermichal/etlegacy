@@ -4886,8 +4886,14 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	                                     // (SURF_NOIMPACT, out-of-world, ...) rather than a real impact
 	qboolean  predHitTarget   = qfalse; // the predicted detonation is a DIRECT hit on the missiletarget
 	char      targetInfo[64];           // missiletarget damage readout, empty when no marker is placed
+	riflenadeSimLog_t predSimLog;       // diagnostic log of the prediction: where the round crossed
+	                                     // geometry collision was switched off for, and what
+	                                     // destroyed it when nothing survived to explode
+	char      simInfo[32];              // short tag built from that log, empty when there is nothing
+	                                     // out of the ordinary to report
 
 	targetInfo[0] = '\0';
+	simInfo[0]    = '\0';
 
 	if (cgs.matchPaused)
 	{
@@ -4900,7 +4906,7 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	}
 	else if ((cgs.sv_cheats || cg.demoPlayback) &&
 	         CG_RiflenadeActivateHeld() &&
-	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints, &predExplodes, &predHitTarget))
+	         CG_PredictRiflenadeTrajectory(predStart, predEnd, predTrajPoints, &predNumTrajPoints, &predExplodes, &predHitTarget, &predSimLog))
 	{
 		usingPrediction = qtrue;
 	}
@@ -5017,6 +5023,23 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 	// Reset the view parameters
 	trap_R_RestoreViewParms();
 
+	// a passthrough count is worth seeing even on an otherwise unremarkable shot - it is the only
+	// hint that the arc drawn in the world crossed a wall on the way. When nothing survived to
+	// explode, name the branch that destroyed it instead: the restricted icon below says the round
+	// vanished but never why. This has to come last in the drawn string, since the damage clause's
+	// colour code would otherwise run on into it
+	if (usingPrediction && predSimLog.numEvents)
+	{
+		if (predSimLog.numPassthrough)
+		{
+			Q_strncpyz(simInfo, va(" ^1THRU%i", predSimLog.numPassthrough), sizeof(simInfo));
+		}
+		else if (!predExplodes)
+		{
+			Q_strncpyz(simInfo, va(" ^3%s", CG_SimEventName(predSimLog.events[predSimLog.numEvents - 1].type)), sizeof(simInfo));
+		}
+	}
+
 	// ground-height readout applies to both the predicted explosion point and the real missile's
 	// current/last-known position (cg.latestMissile keeps pointing at it after it explodes, since
 	// it is only ever reassigned - never cleared - so this keeps showing the real explosion's height
@@ -5067,11 +5090,11 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 		// whenever groundDist was ~0 (e.g. the explosion happened right at ground level)
 		if (groundDist > 1.0f)
 		{
-			CG_DrawCompTextBottom(comp, va("%.0f (z:%.0f)%s", groundDist, queryPoint[2], targetInfo), comp->colorMain, &cgs.media.limboFont2);
+			CG_DrawCompTextBottom(comp, va("%.0f (z:%.0f)%s%s", groundDist, queryPoint[2], targetInfo, simInfo), comp->colorMain, &cgs.media.limboFont2);
 		}
 		else
 		{
-			CG_DrawCompTextBottom(comp, va("z:%.0f%s", queryPoint[2], targetInfo), comp->colorMain, &cgs.media.limboFont2);
+			CG_DrawCompTextBottom(comp, va("z:%.0f%s%s", queryPoint[2], targetInfo, simInfo), comp->colorMain, &cgs.media.limboFont2);
 		}
 	}
 	else if (usingPrediction && !predExplodes)
@@ -5086,5 +5109,11 @@ void CG_DrawMissileCamera(hudComponent_t *comp)
 
 		trap_R_SetColor(NULL);
 		trap_R_DrawStretchPic(x, y, iconSize, iconSize, 0, 0, 1, 1, cgs.media.friendShader);
+
+		// the icon alone does not say which of the silent-destruction paths took the round
+		if (simInfo[0])
+		{
+			CG_DrawCompTextBottom(comp, simInfo, comp->colorMain, &cgs.media.limboFont2);
+		}
 	}
 }

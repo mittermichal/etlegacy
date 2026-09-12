@@ -3498,6 +3498,7 @@ static consoleCommand_t commands[] =
 	{ "prevskin",               CG_TestModelPrevSkin_f       },
 	{ "viewpos",                CG_Viewpos_f                 },
 	{ "missiletarget",          CG_MissileTarget_f           },
+	{ "missilesurfs",           CG_MissileSurfs_f            },
 	{ "+weapzoom",              CG_WeapzoomDown_f            },
 	{ "-weapzoom",              CG_WeapzoomUp_f              },
 	{ "toggleweapzoom",         CG_ToggleWeapzoom_f          },

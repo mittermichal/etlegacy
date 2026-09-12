@@ -3057,7 +3057,76 @@ static void CG_SnapVectorTowards(vec3_t v, vec3_t to)
 	}
 }
 
-qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes, qboolean *hitTarget)
+/**
+ * @brief Short tag for a simulation event, used both by the missile camera readout and the
+ * \missilesurfs console dump.
+ */
+const char *CG_SimEventName(riflenadeSimEventType_t type)
+{
+	switch (type)
+	{
+	case RSE_SKY_ENTER:   return "SKY";
+	case RSE_SKY_STICKY:  return "STICKY";
+	case RSE_SKY_BLIND:   return "THRU";
+	case RSE_SKY_REENTER: return "REENTER";
+	case RSE_SKY_BACKFACE: return "BACKFACE";
+	case RSE_NOIMPACT:    return "NOIMPACT";
+	case RSE_STARTSOLID:  return "STARTSOLID";
+	case RSE_MISSILECLIP: return "MCLIP";
+	case RSE_OUTOFBOUNDS: return "BOUNDS";
+	case RSE_BELOWWORLD:  return "BELOW";
+	default:              return "?";
+	}
+}
+
+/**
+ * @brief Appends one diagnostic event to the simulation log. `tr` may be NULL for the events that
+ * are not tied to a trace. Silently does nothing when logging is off or the log is full - the log
+ * exists to point at a place to go and look, not to be exhaustive.
+ */
+static void CG_LogSimEvent(riflenadeSimLog_t *simLog, riflenadeSimEventType_t type, const trace_t *tr,
+                           const vec3_t origin, int elapsed, int lastSurfaceFlags, int trajPointIdx)
+{
+	riflenadeSimEvent_t *ev;
+
+	if (!simLog || simLog->numEvents >= RIFLENADE_SIM_MAX_EVENTS)
+	{
+		return;
+	}
+
+	ev = &simLog->events[simLog->numEvents++];
+
+	ev->type             = type;
+	ev->surfaceFlags     = tr ? tr->surfaceFlags : 0;
+	ev->contents         = tr ? tr->contents : 0;
+	ev->entityNum        = tr ? tr->entityNum : ENTITYNUM_NONE;
+	ev->lastSurfaceFlags = lastSurfaceFlags;
+	ev->elapsed          = elapsed;
+	ev->trajPointIdx     = trajPointIdx;
+	VectorCopy(origin, ev->origin);
+
+	// only the two that actually carry the missile through solid geometry count as passthrough -
+	// everything else is either silent destruction or context for one of those two
+	if (type == RSE_SKY_BLIND || type == RSE_SKY_STICKY)
+	{
+		simLog->numPassthrough++;
+	}
+}
+
+/**
+ * @brief Raises the tag on one recorded trajectory point. Only ever upgrades (NORMAL < SKY <
+ * BLIND), so a single blind step keeps its colour even though the coarser waypoint it lands in
+ * also gets tagged as plain sky by the steps around it.
+ */
+static void CG_TagSimPoint(riflenadeSimLog_t *simLog, int idx, byte tag)
+{
+	if (simLog && idx >= 0 && idx < RIFLENADE_TRAJ_MAX_POINTS && simLog->pointTags[idx] < tag)
+	{
+		simLog->pointTags[idx] = tag;
+	}
+}
+
+qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t trajPoints[RIFLENADE_TRAJ_MAX_POINTS], int *numTrajPoints, qboolean *explodes, qboolean *hitTarget, riflenadeSimLog_t *simLog)
 {
 	weapon_t      weapon    = cg.predictedPlayerState.weapon;
 	weaponTable_t *wt       = GetWeaponTableData(weapon);
@@ -3146,6 +3215,11 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 	if (hitTarget)
 	{
 		*hitTarget = qfalse; // only ever set by a detonation ON the missiletarget box
+	}
+
+	if (simLog)
+	{
+		memset(simLog, 0, sizeof(*simLog));
 	}
 
 	CG_RiflenadeMissileBounds(weapon, missileMins, missileMaxs);
@@ -3377,6 +3451,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 	                                      // against the *previous* step's surfaceFlags too (g_missile.c:685),
 	                                      // not just the current one - catches a step that grazes a thin sky
 	                                      // face without itself registering SURF_SKY on the very next check
+	qboolean loggedMissileClip = qfalse;  // a bouncing round can sit against a missile clip for many
+	                                       // steps in a row - one log entry per shot is enough
 	VectorCopy(pos, lastOrigin);
 
 	while (elapsed < MAX_TIME)
@@ -3389,6 +3465,9 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		                         // BOUNCE_EXPLODE rule below; `elapsed` itself advances a whole leg
 		                         // at a time, because a bounce re-bases the trajectory at the end of
 		                         // the server frame rather than at the moment of impact
+		int          prevSurfaceFlags = 0; // diagnostic only: lastSurfaceFlags as it stood BEFORE this
+		                                    // step's trace overwrote it, which is what makes a sticky
+		                                    // sky passthrough distinguishable from a fresh sky entry
 
 		// fuse timer elapsed - explodes right here, wherever that physically is (mid-air, mid-bounce,
 		// or settled - doesn't matter), matching the real think()-driven G_ExplodeMissile call exactly
@@ -3419,6 +3498,7 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		if (trajPoints && numTrajPoints && elapsed >= nextRecordAt && *numTrajPoints < RIFLENADE_TRAJ_MAX_POINTS)
 		{
 			VectorCopy(pos, trajPoints[*numTrajPoints]);
+			CG_TagSimPoint(simLog, *numTrajPoints, inSky ? RPT_SKY : RPT_NORMAL);
 			(*numTrajPoints)++;
 			nextRecordAt += RECORD_INTERVAL;
 		}
@@ -3432,8 +3512,32 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		{
 			vec3_t  probeEnd;
 			trace_t upTrace, downTrace;
+			trace_t shadowTrace;           // diagnostic only, never fed back into the simulation
 			qboolean keepFlying   = qfalse;
 			qboolean updateOrigin = qtrue; // mirrors whether this sky sub-path writes r.currentOrigin
+
+			// diagnostic only: collision is off for this entire step, so run the trace the simulation
+			// deliberately skips and record whatever the missile flew through. Every other branch in
+			// here reports why the round was destroyed; this is the only one that answers "where did
+			// it go through a wall", because on those steps nothing is traced at all. Sky faces are
+			// skipped - re-touching the shell it is already inside is not a passthrough
+			if (simLog)
+			{
+				CG_Trace(&shadowTrace, pos, missileMins, missileMaxs, next, cg.predictedPlayerState.clientNum, MASK_MISSILESHOT);
+
+				// startsolid is not a wall crossing: a round that has left the map entirely traces
+				// from inside "solid" every step, and reporting each of those would bury the real
+				// finds. A genuine crossing starts in open space and meets a face part way through
+				if (shadowTrace.fraction < 1.0f && !shadowTrace.startsolid && !shadowTrace.allsolid &&
+				    !(shadowTrace.surfaceFlags & SURF_SKY))
+				{
+					CG_LogSimEvent(simLog, RSE_SKY_BLIND, &shadowTrace, shadowTrace.endpos, elapsed, lastSurfaceFlags,
+					               numTrajPoints ? *numTrajPoints : 0);
+					// the waypoints are far coarser than the steps, so tag the one this step falls
+					// inside - that is the segment the arc gets drawn in the passthrough colour
+					CG_TagSimPoint(simLog, (numTrajPoints && *numTrajPoints > 0) ? *numTrajPoints - 1 : 0, RPT_BLIND);
+				}
+			}
 
 			// matches g_missile.c exactly: while flying through the sky, a missile whose X/Y strays
 			// outside the map's worldspawn "mapcoordsmins"/"mapcoordsmaxs" bounds is freed silently
@@ -3443,6 +3547,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			    (next[0] < cg.mapcoordsMins[0] || next[1] > cg.mapcoordsMins[1] ||
 			     next[0] > cg.mapcoordsMaxs[0] || next[1] < cg.mapcoordsMaxs[1]))
 			{
+				CG_LogSimEvent(simLog, RSE_OUTOFBOUNDS, NULL, lastOrigin, elapsed, lastSurfaceFlags,
+				               numTrajPoints ? *numTrajPoints : 0);
 				VectorCopy(lastOrigin, segEnd);
 				if (explodes)
 				{
@@ -3465,6 +3571,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			}
 			else if (!(upTrace.surfaceFlags & SURF_SKY))
 			{
+				CG_LogSimEvent(simLog, RSE_SKY_BACKFACE, &upTrace, lastOrigin, elapsed, lastSurfaceFlags,
+				               numTrajPoints ? *numTrajPoints : 0);
 				// destroyed silently - no explosion, but the flight up to here can still be shown
 				VectorCopy(lastOrigin, segEnd);
 				if (explodes)
@@ -3482,6 +3590,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 
 				if (downTrace.fraction >= 1.0f)
 				{
+					CG_LogSimEvent(simLog, RSE_BELOWWORLD, NULL, lastOrigin, elapsed, lastSurfaceFlags,
+					               numTrajPoints ? *numTrajPoints : 0);
 					// fell below the world, destroyed silently - flight up to here can still be shown
 					VectorCopy(lastOrigin, segEnd);
 					if (explodes)
@@ -3500,6 +3610,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 			{
 				// re-entered real space below the sky shell - resume normal collision handling
 				inSky = qfalse;
+				CG_LogSimEvent(simLog, RSE_SKY_REENTER, NULL, next, elapsed, lastSurfaceFlags,
+				               numTrajPoints ? *numTrajPoints : 0);
 			}
 
 			// matches g_missile.c exactly: both "keep flying" sky sub-paths call G_RunThink BEFORE
@@ -3563,9 +3675,13 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		// geometry for the rest of the simulation. lastSurfaceFlags is deliberately left untouched
 		// here (still holding the previous step's SURF_SKY), which is exactly what makes the sky
 		// re-entry check below fire on those embedded steps.
+		prevSurfaceFlags = lastSurfaceFlags;
+
 		if (trace.startsolid)
 		{
 			trace.fraction = 0.f;
+			CG_LogSimEvent(simLog, RSE_STARTSOLID, &trace, pos, elapsed, prevSurfaceFlags,
+			               numTrajPoints ? *numTrajPoints : 0);
 		}
 		else
 		{
@@ -3594,6 +3710,14 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 		// g_missile.c:685 ORing in lastSurfaceFlags from the previous step, not just this one.
 		if (skyPassthrough && ((trace.surfaceFlags & SURF_SKY) || (lastSurfaceFlags & SURF_SKY)))
 		{
+			// a step that had no sky face of its own got here on the previous step's flags alone, and
+			// lastSurfaceFlags only survives a step when that step was startsolid - so this is a round
+			// embedded in real geometry being waved through as sky. Worth calling out separately from
+			// a plain sky entry: it is the one case where the diverted trace hit something solid
+			CG_LogSimEvent(simLog, (trace.surfaceFlags & SURF_SKY) ? RSE_SKY_ENTER : RSE_SKY_STICKY,
+			               &trace, trace.endpos, elapsed, prevSurfaceFlags,
+			               numTrajPoints ? *numTrajPoints : 0);
+
 			// enters the sky-flying state - forward collision is ignored from here on
 			inSky = qtrue;
 			VectorCopy(pos, segStart);
@@ -3606,6 +3730,8 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 
 		if (trace.surfaceFlags & SURF_NOIMPACT)
 		{
+			CG_LogSimEvent(simLog, RSE_NOIMPACT, &trace, trace.endpos, elapsed, prevSurfaceFlags,
+			               numTrajPoints ? *numTrajPoints : 0);
 			// real: G_FreeEntity - destroyed silently, no explosion, but still show the flight up
 			// to the point it vanished
 			VectorCopy(pos, segStart);
@@ -3620,6 +3746,17 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 				*explodes = qfalse;
 			}
 			return qtrue;
+		}
+
+		// diagnostic only: the inverse complaint to a passthrough - the round is stopped dead by a
+		// brush with no visible surface at all, which from the player's side looks like it detonated
+		// in mid-air against nothing. CONTENTS_MISSILECLIP is in MASK_MISSILESHOT but not in the
+		// player's own clipmask, so these are exactly the walls only missiles can see
+		if (!loggedMissileClip && (trace.contents & CONTENTS_MISSILECLIP) && !(trace.contents & CONTENTS_SOLID))
+		{
+			CG_LogSimEvent(simLog, RSE_MISSILECLIP, &trace, trace.endpos, elapsed, prevSurfaceFlags,
+			               numTrajPoints ? *numTrajPoints : 0);
+			loggedMissileClip = qtrue;
 		}
 
 		VectorCopy(pos, segStart);
@@ -3711,6 +3848,7 @@ qboolean CG_PredictRiflenadeTrajectory(vec3_t segStart, vec3_t segEnd, vec3_t tr
 #define RIFLENADE_MARK_RAIL_SIDENUM   778 // (weapon fire uses 0, hitbox debug uses 1, bbox debug uses -1)
 #define RIFLENADE_TARGET_RAIL_INDEX   779 // CG_RailTrail's box mode tags its 12 edges by sideNum 1..12,
                                           // so the missiletarget box needs its own index instead
+#define RIFLENADE_EVENT_RAIL_SIDENUM  780 // passthrough markers from the simulation log
 
 /**
  * @brief Draws 4 rails from the predicted explosion point outward to 4 corners arranged in a
@@ -3746,6 +3884,28 @@ static void CG_DrawExplosionMarkerRails(vec3_t origin, vec3_t travelDir, vec3_t 
 }
 
 /**
+ * @brief Draws a small axis-aligned cross at a logged simulation event, so the exact spot the
+ * missile crossed geometry can be found by eye in the world rather than by reading coordinates.
+ */
+static void CG_DrawSimEventMarkerRails(const vec3_t origin, const vec3_t color, int eventIdx)
+{
+	const float len = 16.0f;
+	int         axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		vec3_t from, to;
+
+		VectorCopy(origin, from);
+		VectorCopy(origin, to);
+		from[axis] -= len;
+		to[axis]   += len;
+
+		CG_RailTrail2(color, from, to, eventIdx * 3 + axis, RIFLENADE_EVENT_RAIL_SIDENUM);
+	}
+}
+
+/**
  * @brief Draws the full predicted riflenade arc as a chain of rail-style lines in the 3D world,
  * plus a 4-arrow marker around the predicted explosion point, while +activate is held with a
  * riflenade-capable weapon equipped. The last computed result keeps being redrawn (frozen) after
@@ -3755,16 +3915,20 @@ static void CG_DrawExplosionMarkerRails(vec3_t origin, vec3_t travelDir, vec3_t 
  */
 void CG_DrawRiflenadeTrajectoryRails(void)
 {
-	static vec3_t   cachedPoints[RIFLENADE_TRAJ_MAX_POINTS];
-	static int      cachedCount     = 0;
-	static qboolean cachedValid     = qfalse;
-	static qboolean cachedExplodes  = qfalse;
-	static int      lastComputeTime = -9999;
+	static vec3_t           cachedPoints[RIFLENADE_TRAJ_MAX_POINTS];
+	static int              cachedCount     = 0;
+	static qboolean         cachedValid     = qfalse;
+	static qboolean         cachedExplodes  = qfalse;
+	static int              lastComputeTime = -9999;
+	static riflenadeSimLog_t cachedLog;      // kept alongside the points: the tags colour the arc and
+	                                          // the events place the passthrough markers
 	const int       RECOMPUTE_INTERVAL = 25; // ms - caps the cost of the up-to-~400-step/frame trace
 	                                          // loop below to 40Hz regardless of render frame rate;
 	                                          // imperceptible lag behind aim for a preview feature
 	weapon_t        weapon      = cg.predictedPlayerState.weapon;
 	vec3_t          color       = { 1.0f, 0.45f, 0.1f }; // orange, distinct from the white/blue railgun trail
+	vec3_t          skyColor    = { 0.35f, 0.7f, 1.0f };  // collision off, nothing in the way
+	vec3_t          blindColor  = { 1.0f, 0.0f, 1.0f };   // collision off AND geometry crossed
 	int             i;
 
 	if (!(cgs.sv_cheats || cg.demoPlayback))
@@ -3795,7 +3959,7 @@ void CG_DrawRiflenadeTrajectoryRails(void)
 	{
 		vec3_t   segStart, segEnd;
 		qboolean explodes;
-		qboolean ok = CG_PredictRiflenadeTrajectory(segStart, segEnd, cachedPoints, &cachedCount, &explodes, NULL);
+		qboolean ok = CG_PredictRiflenadeTrajectory(segStart, segEnd, cachedPoints, &cachedCount, &explodes, NULL, &cachedLog);
 
 		lastComputeTime = cg.time;
 		cachedExplodes  = explodes;
@@ -3820,7 +3984,21 @@ void CG_DrawRiflenadeTrajectoryRails(void)
 
 	for (i = 0; i < cachedCount - 1; i++)
 	{
-		CG_RailTrail2(color, cachedPoints[i], cachedPoints[i + 1], i, RIFLENADE_TRAJ_RAIL_SIDENUM);
+		// legs the server flies with collision switched off are drawn apart from the rest: blue where
+		// nothing was in the way, magenta where a shadow trace says the round went through geometry.
+		// A magenta stretch of arc IS the bug report - that is a wall the shot passes through
+		const float *segColor = (cachedLog.pointTags[i] == RPT_BLIND) ? blindColor
+		                        : (cachedLog.pointTags[i] == RPT_SKY) ? skyColor : color;
+
+		CG_RailTrail2(segColor, cachedPoints[i], cachedPoints[i + 1], i, RIFLENADE_TRAJ_RAIL_SIDENUM);
+	}
+
+	for (i = 0; i < cachedLog.numEvents; i++)
+	{
+		if (cachedLog.events[i].type == RSE_SKY_BLIND || cachedLog.events[i].type == RSE_SKY_STICKY)
+		{
+			CG_DrawSimEventMarkerRails(cachedLog.events[i].origin, blindColor, i);
+		}
 	}
 
 	if (cachedExplodes)
@@ -3830,6 +4008,182 @@ void CG_DrawRiflenadeTrajectoryRails(void)
 
 		VectorSubtract(cachedPoints[cachedCount - 1], cachedPoints[cachedCount - 2], travelDir);
 		CG_DrawExplosionMarkerRails(cachedPoints[cachedCount - 1], travelDir, markerColor);
+	}
+}
+
+/**
+ * @struct cgFlagName_t
+ * @brief One bit of a surface/contents mask and the name to print for it.
+ */
+typedef struct
+{
+	int        bit;
+	const char *name;
+} cgFlagName_t;
+
+static const cgFlagName_t cg_surfaceFlagNames[] =
+{
+	{ SURF_NODAMAGE,     "NODAMAGE"     },
+	{ SURF_SLICK,        "SLICK"        },
+	{ SURF_SKY,          "SKY"          },
+	{ SURF_LADDER,       "LADDER"       },
+	{ SURF_NOIMPACT,     "NOIMPACT"     },
+	{ SURF_NOMARKS,      "NOMARKS"      },
+	{ SURF_SPLASH,       "SPLASH"       },
+	{ SURF_NODRAW,       "NODRAW"       },
+	{ SURF_HINT,         "HINT"         },
+	{ SURF_SKIP,         "SKIP"         },
+	{ SURF_NOLIGHTMAP,   "NOLIGHTMAP"   },
+	{ SURF_POINTLIGHT,   "POINTLIGHT"   },
+	{ SURF_METAL,        "METAL"        },
+	{ SURF_NOSTEPS,      "NOSTEPS"      },
+	{ SURF_NONSOLID,     "NONSOLID"     },
+	{ SURF_LIGHTFILTER,  "LIGHTFILTER"  },
+	{ SURF_ALPHASHADOW,  "ALPHASHADOW"  },
+	{ SURF_NODLIGHT,     "NODLIGHT"     },
+	{ SURF_WOOD,         "WOOD"         },
+	{ SURF_GRASS,        "GRASS"        },
+	{ SURF_GRAVEL,       "GRAVEL"       },
+	{ SURF_GLASS,        "GLASS"        },
+	{ SURF_SNOW,         "SNOW"         },
+	{ SURF_ROOF,         "ROOF"         },
+	{ SURF_RUBBLE,       "RUBBLE"       },
+	{ SURF_CARPET,       "CARPET"       },
+	{ SURF_MONSTERSLICK, "MONSTERSLICK" },
+	{ SURF_LANDMINE,     "LANDMINE"     },
+};
+
+static const cgFlagName_t cg_contentsNames[] =
+{
+	{ CONTENTS_SOLID,       "SOLID"       },
+	{ CONTENTS_LAVA,        "LAVA"        },
+	{ CONTENTS_SLIME,       "SLIME"       },
+	{ CONTENTS_WATER,       "WATER"       },
+	{ CONTENTS_FOG,         "FOG"         },
+	{ CONTENTS_MISSILECLIP, "MISSILECLIP" },
+	{ CONTENTS_ITEM,        "ITEM"        },
+	{ CONTENTS_MOVER,       "MOVER"       },
+	{ CONTENTS_AREAPORTAL,  "AREAPORTAL"  },
+	{ CONTENTS_PLAYERCLIP,  "PLAYERCLIP"  },
+	{ CONTENTS_MONSTERCLIP, "MONSTERCLIP" },
+	{ CONTENTS_TELEPORTER,  "TELEPORTER"  },
+	{ CONTENTS_BODY,        "BODY"        },
+	{ CONTENTS_CORPSE,      "CORPSE"      },
+	{ CONTENTS_DETAIL,      "DETAIL"      },
+	{ CONTENTS_STRUCTURAL,  "STRUCTURAL"  },
+	{ CONTENTS_TRANSLUCENT, "TRANSLUCENT" },
+	{ CONTENTS_TRIGGER,     "TRIGGER"     },
+	{ CONTENTS_NODROP,      "NODROP"      },
+};
+
+/**
+ * @brief Decodes a bit mask into a readable list. Returns a static buffer, so only one call per
+ * printf - sky brushes routinely carry SURF_SKY|SURF_NOIMPACT|SURF_NODRAW together and reading
+ * only the first set bit would hide exactly the combinations worth seeing.
+ */
+static const char *CG_FlagsString(int flags, const cgFlagName_t *names, int numNames)
+{
+	static char buf[256];
+	int         i;
+	int         known = 0;
+
+	buf[0] = '\0';
+
+	if (!flags)
+	{
+		return "none";
+	}
+
+	for (i = 0; i < numNames; i++)
+	{
+		if (flags & names[i].bit)
+		{
+			if (buf[0])
+			{
+				Q_strcat(buf, sizeof(buf), "|");
+			}
+			Q_strcat(buf, sizeof(buf), names[i].name);
+			known |= names[i].bit;
+		}
+	}
+
+	if (flags & ~known)
+	{
+		if (buf[0])
+		{
+			Q_strcat(buf, sizeof(buf), "|");
+		}
+		Q_strcat(buf, sizeof(buf), va("0x%x", (unsigned int)(flags & ~known)));
+	}
+
+	return buf;
+}
+
+/**
+ * @brief Runs one trajectory simulation from the current aim and dumps its diagnostic log. Console
+ * rather than HUD because the interesting part is the full flag decode, and because the missile
+ * camera re-simulates every rendered frame - printing from there would flood.
+ */
+void CG_MissileSurfs_f(void)
+{
+	vec3_t            segStart, segEnd;
+	vec3_t            points[RIFLENADE_TRAJ_MAX_POINTS];
+	int               numPoints = 0;
+	qboolean          explodes  = qfalse;
+	riflenadeSimLog_t log;
+	int               i;
+
+	if (!(cgs.sv_cheats || cg.demoPlayback))
+	{
+		CG_Printf("missilesurfs: needs cheats (devmap) or demo playback\n");
+		return;
+	}
+
+	if (!CG_IsPreviewableWeapon(cg.predictedPlayerState.weapon))
+	{
+		CG_Printf("missilesurfs: the equipped weapon has no trajectory preview\n");
+		return;
+	}
+
+	if (!CG_PredictRiflenadeTrajectory(segStart, segEnd, points, &numPoints, &explodes, NULL, &log))
+	{
+		CG_Printf("missilesurfs: no shot could be simulated from here\n");
+		return;
+	}
+
+	CG_Printf("missilesurfs: %s at (%.1f %.1f %.1f) - %i event(s), %i passthrough\n",
+	          explodes ? "explodes" : "destroyed silently", segEnd[0], segEnd[1], segEnd[2],
+	          log.numEvents, log.numPassthrough);
+
+	if (!log.numEvents)
+	{
+		CG_Printf("  nothing unusual - the round stopped at the first thing in its way\n");
+		return;
+	}
+
+	for (i = 0; i < log.numEvents; i++)
+	{
+		const riflenadeSimEvent_t *ev = &log.events[i];
+
+		CG_Printf("  %5ims %-10s (%.1f %.1f %.1f)\n", ev->elapsed, CG_SimEventName(ev->type),
+		          ev->origin[0], ev->origin[1], ev->origin[2]);
+
+		if (ev->entityNum != ENTITYNUM_NONE && ev->entityNum < ENTITYNUM_WORLD)
+		{
+			// an entity hit reports no surface flags and no brush contents at all, so decoding them
+			// would just print "none" twice and read as if the brush had no flags set
+			CG_Printf("           entity %i\n", ev->entityNum);
+			continue;
+		}
+
+		CG_Printf("           surf %s\n", CG_FlagsString(ev->surfaceFlags, cg_surfaceFlagNames, ARRAY_LEN(cg_surfaceFlagNames)));
+
+		if (ev->lastSurfaceFlags && ev->lastSurfaceFlags != ev->surfaceFlags)
+		{
+			CG_Printf("           prev %s\n", CG_FlagsString(ev->lastSurfaceFlags, cg_surfaceFlagNames, ARRAY_LEN(cg_surfaceFlagNames)));
+		}
+
+		CG_Printf("           cont %s\n", CG_FlagsString(ev->contents, cg_contentsNames, ARRAY_LEN(cg_contentsNames)));
 	}
 }
 
