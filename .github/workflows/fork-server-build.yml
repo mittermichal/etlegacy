@@ -31,6 +31,14 @@ on:
         description: "Build macOS server"
         type: boolean
         default: false
+      release_tag:
+        description: "Tag to publish a GitHub Release at (leave empty for artifacts only)"
+        type: string
+        default: ""
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: true
 
 # 64bit Linux is always built: it is what the etl.lol servers run.
 jobs:
@@ -217,3 +225,54 @@ jobs:
             build/etlded*.exe
             build/**/etlded*.exe
           if-no-files-found: error
+
+  #   ____       _
+  #  |  _ \ ___ | |  ___  __ _ ___ ___
+  #  | |_) / _ \| | / _ \/ _` / __/ _ \
+  #  |  _ <  __/| ||  __/ (_| \__ \  __/
+  #  |_| \_\___||_| \___|\__,_|___/\___|
+  #
+  # Release assets are downloadable without a GitHub login, unlike workflow
+  # artifacts, so this is the form to hand to server admins.
+  release:
+    runs-on: ubuntu-24.04
+    needs: [pre-build, lnx64-server, lnx32-server, lnx-aarch64-server, osx-server, win64-server, win32-server]
+    # Deselected platforms are skipped, not failed - do not let that skip the release.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && inputs.release_tag != '' }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "etlded-*"
+          path: dist
+          # No merge-multiple: win32 and win64 both produce etlded.exe.
+
+      - name: Package each platform
+        shell: bash
+        run: |
+          cd dist
+          for d in */; do
+            name="${d%/}"
+            chmod +x "$name"/etlded.* 2>/dev/null || true
+            zip -rj "../${name}.zip" "$name"
+          done
+          cd ..
+          ls -la ./*.zip
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # There is no checkout in this job, so gh cannot infer the repo from git remotes
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          notes="Dedicated server (etlded) build of ${{needs.pre-build.outputs.describe}} from branch \`${{ github.ref_name }}\` (${{ github.sha }})"
+          notes="$notes"$'\n\n'"Engine only - keep your existing mod pk3 and replace the etlded binary."
+
+          gh release create "$RELEASE_TAG" \
+            --title "$RELEASE_TAG (${{ github.ref_name }})" \
+            --target "${{ github.sha }}" \
+            --notes "$notes" \
+            ${{ inputs.prerelease && '--prerelease' || '' }} \
+            ./*.zip
