@@ -1,0 +1,219 @@
+# Fork-only server engine build.
+#
+# Builds just the dedicated server binary (etlded) for the same architectures
+# fork-release.yml builds the mod libraries for, and publishes them as workflow
+# artifacts. Intended for handing a test binary to server admins before a PR is
+# merged - there is no release, no signing and no upload anywhere.
+#
+# build.yml and fork-release.yml are intentionally left untouched.
+name: ForkServerBuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      lnx32:
+        description: "Build 32bit Linux server"
+        type: boolean
+        default: true
+      lnx_aarch64:
+        description: "Build aarch64 Linux server (cross-compiled)"
+        type: boolean
+        default: true
+      win64:
+        description: "Build 64bit Windows server"
+        type: boolean
+        default: true
+      win32:
+        description: "Build 32bit Windows server"
+        type: boolean
+        default: false
+      osx:
+        description: "Build macOS server"
+        type: boolean
+        default: false
+
+# 64bit Linux is always built: it is what the etl.lol servers run.
+jobs:
+  pre-build:
+    runs-on: ubuntu-latest
+    outputs:
+      describe: ${{ steps.git.outputs.describe }}
+      tag: ${{ steps.git.outputs.tag }}
+      uid: ${{ steps.git.outputs.uid }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Fetch git version information
+        id: git
+        run: |
+          git fetch --tags --force
+          git_describe=$(git describe --abbrev=7 2>/dev/null | awk '{$1=$1};1')
+          git_tag=$(git describe --abbrev=0 2>/dev/null | awk '{$1=$1};1')
+          git_describe=${git_describe:-$(cat VERSION.txt)-fork}
+          git_tag=${git_tag:-$(cat VERSION.txt)}
+          ci_id=$(uuidgen)
+          echo "Version info: $git_describe / $git_tag"
+          {
+            echo "describe=$git_describe"
+            echo "tag=$git_tag"
+            echo "uid=$ci_id"
+          } >> "$GITHUB_OUTPUT"
+
+  lnx64-server:
+    runs-on: ubuntu-24.04
+    needs: pre-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build
+        uses: maus007/docker-run-action-fork@v1
+        with:
+          image: etlegacy/lnx-build:latest
+          options: -v ${{ github.workspace }}:/code -e CI_ETL_DESCRIBE=${{needs.pre-build.outputs.describe}} -e CI_ETL_TAG=${{needs.pre-build.outputs.tag}} -e CI_ETL_UID=${{needs.pre-build.outputs.uid}} -e CI=true
+          run: |
+            git config --global --add safe.directory /code
+            ./easybuild.sh build -64 -server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: etlded-lnx-x86_64-${{ needs.pre-build.outputs.describe }}
+          path: build/etlded*
+          if-no-files-found: error
+
+  lnx32-server:
+    runs-on: ubuntu-24.04
+    needs: pre-build
+    if: ${{ inputs.lnx32 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build
+        uses: maus007/docker-run-action-fork@v1
+        with:
+          image: etlegacy/lnx-build:latest
+          options: -v ${{ github.workspace }}:/code -e CI_ETL_DESCRIBE=${{needs.pre-build.outputs.describe}} -e CI_ETL_TAG=${{needs.pre-build.outputs.tag}} -e CI_ETL_UID=${{needs.pre-build.outputs.uid}} -e CI=true
+          run: |
+            git config --global --add safe.directory /code
+            ./easybuild.sh build -server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: etlded-lnx-i386-${{ needs.pre-build.outputs.describe }}
+          path: build/etlded*
+          if-no-files-found: error
+
+  lnx-aarch64-server:
+    runs-on: ubuntu-24.04
+    needs: pre-build
+    if: ${{ inputs.lnx_aarch64 }}
+    container:
+      image: etlegacy/lnx-aarch64-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build
+        env:
+          CI_ETL_DESCRIBE: ${{needs.pre-build.outputs.describe}}
+          CI_ETL_TAG: ${{needs.pre-build.outputs.tag}}
+          CI_ETL_UID: ${{needs.pre-build.outputs.uid}}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ./easybuild.sh build -RPIT -server -ninja
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: etlded-lnx-aarch64-${{ needs.pre-build.outputs.describe }}
+          path: build/etlded*
+          if-no-files-found: error
+
+  osx-server:
+    runs-on: macos-14
+    needs: pre-build
+    if: ${{ inputs.osx }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        run: brew bundle
+
+      - name: Build
+        env:
+          SDKROOT: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+          DEVELOPER_DIR: /Library/Developer/CommandLineTools
+          CI_ETL_DESCRIBE: ${{needs.pre-build.outputs.describe}}
+          CI_ETL_TAG: ${{needs.pre-build.outputs.tag}}
+          CI_ETL_UID: ${{needs.pre-build.outputs.uid}}
+        shell: bash
+        run: |
+          ./easybuild.sh build -64 -server --osx=10.10 --osx-arc="x86_64;arm64" -j
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: etlded-osx-${{ needs.pre-build.outputs.describe }}
+          path: build/etlded*
+          if-no-files-found: error
+
+  # easybuild.bat has no -server flag, so Windows does a full build and we keep
+  # only the dedicated server binary out of it.
+  win64-server:
+    runs-on: windows-2022
+    needs: pre-build
+    if: ${{ inputs.win64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build
+        shell: cmd
+        env:
+          CI_ETL_DESCRIBE: ${{needs.pre-build.outputs.describe}}
+          CI_ETL_TAG: ${{needs.pre-build.outputs.tag}}
+          CI_ETL_UID: ${{needs.pre-build.outputs.uid}}
+        run: |
+          call .\easybuild.bat build -64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: etlded-win64-${{ needs.pre-build.outputs.describe }}
+          path: |
+            build/etlded*.exe
+            build/**/etlded*.exe
+          if-no-files-found: error
+
+  win32-server:
+    runs-on: windows-2022
+    needs: pre-build
+    if: ${{ inputs.win32 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build
+        shell: cmd
+        env:
+          CI_ETL_DESCRIBE: ${{needs.pre-build.outputs.describe}}
+          CI_ETL_TAG: ${{needs.pre-build.outputs.tag}}
+          CI_ETL_UID: ${{needs.pre-build.outputs.uid}}
+        run: |
+          call .\easybuild.bat build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: etlded-win32-${{ needs.pre-build.outputs.describe }}
+          path: |
+            build/etlded*.exe
+            build/**/etlded*.exe
+          if-no-files-found: error
